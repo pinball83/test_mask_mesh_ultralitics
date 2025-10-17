@@ -28,10 +28,10 @@ class SegmentationCameraView extends StatelessWidget {
 
     final modelPath = controller.modelPath;
     if (modelPath == null) {
-      return const _ErrorState(
-        message: 'Segmentation model not available.',
-      );
+      return const _ErrorState(message: 'Segmentation model not available.');
     }
+
+    controller.ensurePreferredCamera();
 
     return Stack(
       children: [
@@ -53,6 +53,8 @@ class SegmentationCameraView extends StatelessWidget {
             child: SegmentationOverlay(
               detections: controller.detections,
               maskThreshold: controller.maskThreshold,
+              flipHorizontal: controller.flipMaskHorizontal,
+              flipVertical: controller.flipMaskVertical,
             ),
           ),
         Positioned(
@@ -82,7 +84,7 @@ class _LoadingState extends StatelessWidget {
         width: 260,
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.7),
+          color: Colors.black.withValues(alpha: 0.7),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(color: Colors.white10),
         ),
@@ -99,10 +101,9 @@ class _LoadingState extends StatelessWidget {
             const SizedBox(height: 8),
             Text(
               '$percent%',
-              style: Theme.of(context)
-                  .textTheme
-                  .labelLarge
-                  ?.copyWith(color: Colors.tealAccent),
+              style: Theme.of(
+                context,
+              ).textTheme.labelLarge?.copyWith(color: Colors.tealAccent),
             ),
           ],
         ),
@@ -125,8 +126,11 @@ class _ErrorState extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.warning_amber_rounded,
-                size: 72, color: Colors.orangeAccent),
+            const Icon(
+              Icons.warning_amber_rounded,
+              size: 72,
+              color: Colors.orangeAccent,
+            ),
             const SizedBox(height: 16),
             Text(
               message,
@@ -135,10 +139,7 @@ class _ErrorState extends StatelessWidget {
             ),
             if (onRetry != null) ...[
               const SizedBox(height: 16),
-              FilledButton(
-                onPressed: onRetry,
-                child: const Text('Retry'),
-              ),
+              FilledButton(onPressed: onRetry, child: const Text('Retry')),
             ],
           ],
         ),
@@ -158,7 +159,7 @@ class _StatsBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.6),
+        color: Colors.black.withValues(alpha: 0.6),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.white10),
       ),

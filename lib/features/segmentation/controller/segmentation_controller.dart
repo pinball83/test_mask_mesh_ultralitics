@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:ultralytics_yolo/models/yolo_result.dart';
-import 'package:ultralytics_yolo/models/yolo_task.dart';
 import 'package:ultralytics_yolo/widgets/yolo_controller.dart';
 import 'package:ultralytics_yolo/yolo_performance_metrics.dart';
 import 'package:ultralytics_yolo/yolo_streaming_config.dart';
@@ -11,9 +10,8 @@ import 'package:ultralytics_yolo/yolo_streaming_config.dart';
 import '../services/model_loader.dart';
 
 class SegmentationController extends ChangeNotifier {
-  SegmentationController({
-    ModelLoader? modelLoader,
-  }) : _modelLoader = modelLoader ?? ModelLoader();
+  SegmentationController({ModelLoader? modelLoader})
+    : _modelLoader = modelLoader ?? ModelLoader();
 
   final ModelLoader _modelLoader;
   final YOLOViewController yoloController = YOLOViewController();
@@ -30,6 +28,11 @@ class SegmentationController extends ChangeNotifier {
   String? _modelPath;
   String? _errorMessage;
   List<YOLOResult> _currentDetections = const [];
+  bool _flipMaskHorizontal = false;
+  bool _flipMaskVertical = false;
+  final bool _preferFrontCamera = true;
+  bool _defaultCameraApplied = false;
+  Timer? _cameraRetryTimer;
 
   YOLOStreamingConfig get streamingConfig =>
       const YOLOStreamingConfig.withMasks();
@@ -46,6 +49,8 @@ class SegmentationController extends ChangeNotifier {
   String? get modelPath => _modelPath;
   String? get errorMessage => _errorMessage;
   List<YOLOResult> get detections => _currentDetections;
+  bool get flipMaskHorizontal => _flipMaskHorizontal;
+  bool get flipMaskVertical => _flipMaskVertical;
 
   Future<void> initialize() async {
     if (!Platform.isAndroid && !Platform.isIOS) {
@@ -88,6 +93,7 @@ class SegmentationController extends ChangeNotifier {
       _statusMessage = 'Model ready. Initializing camera...';
       _isLoading = false;
       notifyListeners();
+      ensurePreferredCamera();
     } catch (error, stackTrace) {
       _errorMessage = 'Failed to prepare model: $error';
       _statusMessage = 'Tap to retry';
@@ -99,6 +105,7 @@ class SegmentationController extends ChangeNotifier {
   }
 
   void onResults(List<YOLOResult> results) {
+    ensurePreferredCamera();
     _currentDetections = results;
     notifyListeners();
   }
@@ -108,6 +115,7 @@ class SegmentationController extends ChangeNotifier {
       _fps = metrics.fps;
       notifyListeners();
     }
+    ensurePreferredCamera();
   }
 
   void onZoomChanged(double zoomLevel) {
@@ -155,9 +163,42 @@ class SegmentationController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void toggleMaskHorizontalFlip() {
+    _flipMaskHorizontal = !_flipMaskHorizontal;
+    notifyListeners();
+  }
+
+  void toggleMaskVerticalFlip() {
+    _flipMaskVertical = !_flipMaskVertical;
+    notifyListeners();
+  }
+
+  void ensurePreferredCamera() {
+    if (!_preferFrontCamera || _defaultCameraApplied) {
+      return;
+    }
+
+    if (yoloController.isInitialized) {
+      _defaultCameraApplied = true;
+      unawaited(yoloController.switchCamera());
+      return;
+    }
+
+    _scheduleCameraRetry();
+  }
+
+  void _scheduleCameraRetry() {
+    if (_cameraRetryTimer != null) return;
+    _cameraRetryTimer = Timer(const Duration(milliseconds: 150), () {
+      _cameraRetryTimer = null;
+      ensurePreferredCamera();
+    });
+  }
+
   @override
   void dispose() {
     unawaited(yoloController.stop());
+    _cameraRetryTimer?.cancel();
     super.dispose();
   }
 }

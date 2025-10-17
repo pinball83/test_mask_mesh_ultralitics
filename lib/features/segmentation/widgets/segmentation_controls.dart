@@ -38,6 +38,24 @@ class SegmentationControls extends StatelessWidget {
                 ),
               ),
               IconButton(
+                tooltip: controller.flipMaskHorizontal
+                    ? 'Disable horizontal mirror'
+                    : 'Mirror mask horizontally',
+                isSelected: controller.flipMaskHorizontal,
+                onPressed: controller.toggleMaskHorizontalFlip,
+                icon: const Icon(Icons.swap_horiz),
+                selectedIcon: const Icon(Icons.swap_horiz),
+              ),
+              IconButton(
+                tooltip: controller.flipMaskVertical
+                    ? 'Disable vertical mirror'
+                    : 'Mirror mask vertically',
+                isSelected: controller.flipMaskVertical,
+                onPressed: controller.toggleMaskVerticalFlip,
+                icon: const Icon(Icons.swap_vert),
+                selectedIcon: const Icon(Icons.swap_vert),
+              ),
+              IconButton(
                 tooltip: 'Flip camera',
                 onPressed: controller.flipCamera,
                 icon: const Icon(Icons.flip_camera_android_outlined),
@@ -56,8 +74,9 @@ class SegmentationControls extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Text(
-              'Mask threshold (${controller.maskThreshold.toStringAsFixed(2)})',
-              style: theme.textTheme.labelLarge),
+            'Mask threshold (${controller.maskThreshold.toStringAsFixed(2)})',
+            style: theme.textTheme.labelLarge,
+          ),
           Slider(
             value: controller.maskThreshold.clamp(0.1, 0.95),
             min: 0.1,
