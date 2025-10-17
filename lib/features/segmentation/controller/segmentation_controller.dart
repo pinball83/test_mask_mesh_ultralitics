@@ -28,7 +28,7 @@ class SegmentationController extends ChangeNotifier {
   String? _modelPath;
   String? _errorMessage;
   List<YOLOResult> _currentDetections = const [];
-  bool _flipMaskHorizontal = false;
+  bool _flipMaskHorizontal = true;
   bool _flipMaskVertical = false;
   final bool _preferFrontCamera = true;
   bool _defaultCameraApplied = false;

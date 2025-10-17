@@ -79,29 +79,49 @@ class _SegmentationMaskPainter extends CustomPainter {
       final maskWidth = mask.first.length;
       if (maskWidth == 0 || maskHeight == 0) continue;
 
-      final scaledBounds = Rect.fromLTRB(
-        dx + bounds.left * scale,
-        dy + bounds.top * scale,
-        dx + bounds.right * scale,
-        dy + bounds.bottom * scale,
-      );
+      final cellWidth = scaledWidth / maskWidth;
+      final cellHeight = scaledHeight / maskHeight;
 
-      if (scaledBounds.width <= 0 || scaledBounds.height <= 0) continue;
+      var startX = 0;
+      var endX = maskWidth;
+      var startY = 0;
+      var endY = maskHeight;
 
-      final cellWidth = scaledBounds.width / maskWidth;
-      final cellHeight = scaledBounds.height / maskHeight;
+      final normalizedBounds = detection.normalizedBox;
+      if (!normalizedBounds.isEmpty) {
+        startX = _clampIndex(
+          (normalizedBounds.left.clamp(0.0, 1.0) * maskWidth).floor(),
+          0,
+          maskWidth,
+        );
+        endX = _clampIndex(
+          (normalizedBounds.right.clamp(0.0, 1.0) * maskWidth).ceil(),
+          startX + 1,
+          maskWidth,
+        );
+        startY = _clampIndex(
+          (normalizedBounds.top.clamp(0.0, 1.0) * maskHeight).floor(),
+          0,
+          maskHeight,
+        );
+        endY = _clampIndex(
+          (normalizedBounds.bottom.clamp(0.0, 1.0) * maskHeight).ceil(),
+          startY + 1,
+          maskHeight,
+        );
+      }
 
-      for (var y = 0; y < maskHeight; y++) {
+      for (var y = startY; y < endY; y++) {
         final row = mask[y];
         final mappedY = flipVertical ? (maskHeight - 1 - y) : y;
-        final top = scaledBounds.top + mappedY * cellHeight;
+        final top = dy + mappedY * cellHeight;
 
-        for (var x = 0; x < maskWidth; x++) {
+        for (var x = startX; x < endX; x++) {
           final value = row[x];
           if (value < maskThreshold) continue;
 
           final mappedX = flipHorizontal ? (maskWidth - 1 - x) : x;
-          final left = scaledBounds.left + mappedX * cellWidth;
+          final left = dx + mappedX * cellWidth;
 
           final opacity = (value.clamp(0.0, 1.0) * 0.65).clamp(0.15, 0.7);
           overlayPaint.color = Colors.tealAccent.withValues(
@@ -168,5 +188,11 @@ class _SegmentationMaskPainter extends CustomPainter {
     }
 
     return null;
+  }
+
+  int _clampIndex(int value, int min, int max) {
+    if (value < min) return min;
+    if (value > max) return max;
+    return value;
   }
 }
