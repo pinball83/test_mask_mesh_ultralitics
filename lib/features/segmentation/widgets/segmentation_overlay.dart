@@ -1,33 +1,88 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:ultralytics_yolo/models/yolo_result.dart';
 
-class SegmentationOverlay extends StatelessWidget {
+class SegmentationOverlay extends StatefulWidget {
   const SegmentationOverlay({
     super.key,
     required this.detections,
     required this.maskThreshold,
     required this.flipHorizontal,
     required this.flipVertical,
+    this.backgroundAsset = 'assets/images/bg_image.jpg',
   });
 
   final List<YOLOResult> detections;
   final double maskThreshold;
   final bool flipHorizontal;
   final bool flipVertical;
+  final String backgroundAsset;
+
+  @override
+  State<SegmentationOverlay> createState() => _SegmentationOverlayState();
+}
+
+class _SegmentationOverlayState extends State<SegmentationOverlay> {
+  ui.Image? _backgroundImage;
+  ImageStream? _imageStream;
+  ImageStreamListener? _imageStreamListener;
+
+  @override
+  void initState() {
+    super.initState();
+    _resolveBackgroundImage();
+  }
+
+  @override
+  void didUpdateWidget(covariant SegmentationOverlay oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.backgroundAsset != oldWidget.backgroundAsset) {
+      _resolveBackgroundImage();
+    }
+  }
+
+  @override
+  void dispose() {
+    _disposeImageStream();
+    super.dispose();
+  }
+
+  void _resolveBackgroundImage() {
+    _disposeImageStream();
+    final imageProvider = AssetImage(widget.backgroundAsset);
+    final stream = imageProvider.resolve(ImageConfiguration.empty);
+    _imageStream = stream;
+    _imageStreamListener = ImageStreamListener((imageInfo, _) {
+      setState(() {
+        _backgroundImage = imageInfo.image;
+      });
+    });
+    stream.addListener(_imageStreamListener!);
+  }
+
+  void _disposeImageStream() {
+    if (_imageStream != null && _imageStreamListener != null) {
+      _imageStream!.removeListener(_imageStreamListener!);
+    }
+    _imageStream = null;
+    _imageStreamListener = null;
+  }
 
   @override
   Widget build(BuildContext context) {
-    if (detections.isEmpty) {
+    if (widget.detections.isEmpty) {
       return const SizedBox.shrink();
     }
 
     return IgnorePointer(
       child: CustomPaint(
         painter: _SegmentationMaskPainter(
-          detections: detections,
-          maskThreshold: maskThreshold,
-          flipHorizontal: flipHorizontal,
-          flipVertical: flipVertical,
+          detections: widget.detections,
+          maskThreshold: widget.maskThreshold,
+          flipHorizontal: widget.flipHorizontal,
+          flipVertical: widget.flipVertical,
+          backgroundImage: _backgroundImage,
         ),
       ),
     );
@@ -40,12 +95,14 @@ class _SegmentationMaskPainter extends CustomPainter {
     required this.maskThreshold,
     required this.flipHorizontal,
     required this.flipVertical,
+    this.backgroundImage,
   });
 
   final List<YOLOResult> detections;
   final double maskThreshold;
   final bool flipHorizontal;
   final bool flipVertical;
+  final ui.Image? backgroundImage;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -72,7 +129,16 @@ class _SegmentationMaskPainter extends CustomPainter {
     final backgroundPaint = Paint()
       ..color = Colors.black.withValues(alpha: 0.5);
     canvas.saveLayer(Offset.zero & size, Paint());
-    canvas.drawRect(Offset.zero & size, backgroundPaint);
+    if (backgroundImage != null) {
+      paintImage(
+        canvas: canvas,
+        rect: Offset.zero & size,
+        image: backgroundImage!,
+        fit: BoxFit.cover,
+      );
+    } else {
+      canvas.drawRect(Offset.zero & size, backgroundPaint);
+    }
     final clearPaint = Paint()..blendMode = BlendMode.clear;
 
     for (final detection in detections) {
