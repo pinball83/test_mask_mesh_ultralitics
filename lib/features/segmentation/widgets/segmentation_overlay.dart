@@ -49,7 +49,6 @@ class _SegmentationMaskPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final overlayPaint = Paint()..blendMode = BlendMode.srcOver;
     canvas.save();
     canvas.clipRect(Offset.zero & size);
 
@@ -69,6 +68,12 @@ class _SegmentationMaskPainter extends CustomPainter {
     final scaledHeight = sourceHeight * scale;
     final dx = (size.width - scaledWidth) / 2;
     final dy = (size.height - scaledHeight) / 2;
+
+    final backgroundPaint = Paint()
+      ..color = Colors.black.withValues(alpha: 0.5);
+    canvas.saveLayer(Offset.zero & size, Paint());
+    canvas.drawRect(Offset.zero & size, backgroundPaint);
+    final clearPaint = Paint()..blendMode = BlendMode.clear;
 
     for (final detection in detections) {
       final mask = detection.mask;
@@ -123,19 +128,15 @@ class _SegmentationMaskPainter extends CustomPainter {
           final mappedX = flipHorizontal ? (maskWidth - 1 - x) : x;
           final left = dx + mappedX * cellWidth;
 
-          final opacity = (value.clamp(0.0, 1.0) * 0.65).clamp(0.15, 0.7);
-          overlayPaint.color = Colors.tealAccent.withValues(
-            alpha: opacity.toDouble(),
-          );
-
           canvas.drawRect(
             Rect.fromLTWH(left, top, cellWidth, cellHeight),
-            overlayPaint,
+            clearPaint,
           );
         }
       }
     }
 
+    canvas.restore();
     canvas.restore();
   }
 
