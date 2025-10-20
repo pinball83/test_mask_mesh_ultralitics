@@ -38,24 +38,6 @@ class SegmentationControls extends StatelessWidget {
                 ),
               ),
               IconButton(
-                tooltip: controller.flipMaskHorizontal
-                    ? 'Disable horizontal mirror'
-                    : 'Mirror mask horizontally',
-                isSelected: controller.flipMaskHorizontal,
-                onPressed: controller.toggleMaskHorizontalFlip,
-                icon: const Icon(Icons.swap_horiz),
-                selectedIcon: const Icon(Icons.swap_horiz),
-              ),
-              IconButton(
-                tooltip: controller.flipMaskVertical
-                    ? 'Disable vertical mirror'
-                    : 'Mirror mask vertically',
-                isSelected: controller.flipMaskVertical,
-                onPressed: controller.toggleMaskVerticalFlip,
-                icon: const Icon(Icons.swap_vert),
-                selectedIcon: const Icon(Icons.swap_vert),
-              ),
-              IconButton(
                 tooltip: 'Flip camera',
                 onPressed: controller.flipCamera,
                 icon: const Icon(Icons.flip_camera_android_outlined),
