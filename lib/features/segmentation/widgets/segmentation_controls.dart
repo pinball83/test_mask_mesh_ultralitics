@@ -37,11 +37,6 @@ class SegmentationControls extends StatelessWidget {
                   onChanged: (_) => controller.toggleMasks(),
                 ),
               ),
-              IconButton(
-                tooltip: 'Flip camera',
-                onPressed: controller.flipCamera,
-                icon: const Icon(Icons.flip_camera_android_outlined),
-              ),
             ],
           ),
           const SizedBox(height: 12),
