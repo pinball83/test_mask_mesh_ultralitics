@@ -42,16 +42,6 @@ class SegmentationControls extends StatelessWidget {
                 onPressed: controller.flipCamera,
                 icon: const Icon(Icons.flip_camera_android_outlined),
               ),
-              IconButton(
-                tooltip: 'Zoom out',
-                onPressed: controller.zoomOut,
-                icon: const Icon(Icons.zoom_out),
-              ),
-              IconButton(
-                tooltip: 'Zoom in',
-                onPressed: controller.zoomIn,
-                icon: const Icon(Icons.zoom_in),
-              ),
             ],
           ),
           const SizedBox(height: 12),
