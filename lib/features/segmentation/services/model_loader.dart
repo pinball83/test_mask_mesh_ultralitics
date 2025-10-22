@@ -11,33 +11,44 @@ typedef StatusCallback = void Function(String message);
 
 /// Handles locating, downloading, and caching the segmentation model.
 class ModelLoader {
-  static const String _modelName = 'yolo11n-seg';
-  static const String _downloadBase =
-      'https://github.com/ultralytics/yolo-flutter-app/releases/download/v0.0.0';
+  static const String modelNameSegmentation = 'yolo11n-seg';
+  static const String modelNamePose = 'yolo11s-pose';
+
+  static const String _downloadBase = 'https://dn9skab9p5f1y.cloudfront.net';
 
   static final MethodChannel _channel =
       ChannelConfig.createSingleImageChannel();
 
   Future<String?> ensureSegmentationModel({
+    required String modelName,
     ProgressCallback? onProgress,
     StatusCallback? onStatus,
   }) async {
     if (Platform.isAndroid) {
-      return _prepareAndroidModel(onProgress: onProgress, onStatus: onStatus);
+      return _prepareAndroidModel(
+        modelName: modelName,
+        onProgress: onProgress,
+        onStatus: onStatus,
+      );
     }
     if (Platform.isIOS) {
-      return _prepareIOSModel(onProgress: onProgress, onStatus: onStatus);
+      return _prepareIOSModel(
+        modelName: modelName,
+        onProgress: onProgress,
+        onStatus: onStatus,
+      );
     }
     onStatus?.call('Unsupported platform for Ultralytics camera runtime.');
     return null;
   }
 
   Future<String?> _prepareAndroidModel({
+    required String modelName,
     ProgressCallback? onProgress,
     StatusCallback? onStatus,
   }) async {
-    final assetName = '$_modelName.tflite';
-    onStatus?.call('Checking device for $_modelName...');
+    final assetName = '$modelName.tflite';
+    onStatus?.call('Checking device for $modelName...');
 
     try {
       final result = await _channel.invokeMethod<Map<dynamic, dynamic>>(
@@ -63,8 +74,10 @@ class ModelLoader {
     }
 
     onStatus?.call('Downloading segmentation model...');
-    final bytes = await _downloadFile('$_downloadBase/$assetName',
-        onProgress: onProgress);
+    final bytes = await _downloadFile(
+      '$_downloadBase/$assetName',
+      onProgress: onProgress,
+    );
     if (bytes == null || bytes.isEmpty) {
       onStatus?.call('Download failed.');
       return null;
@@ -76,11 +89,12 @@ class ModelLoader {
   }
 
   Future<String?> _prepareIOSModel({
+    required String modelName,
     ProgressCallback? onProgress,
     StatusCallback? onStatus,
   }) async {
-    final bundleName = '$_modelName.mlpackage';
-    onStatus?.call('Checking bundle for $_modelName...');
+    final bundleName = '$modelName.mlpackage';
+    onStatus?.call('Checking bundle for $modelName...');
 
     try {
       final result = await _channel.invokeMethod<Map<dynamic, dynamic>>(

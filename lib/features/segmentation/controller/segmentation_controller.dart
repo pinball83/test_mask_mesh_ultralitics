@@ -70,6 +70,7 @@ class SegmentationController extends ChangeNotifier {
 
     try {
       _modelPath = await _modelLoader.ensureSegmentationModel(
+        modelName: ModelLoader.modelNameSegmentation,
         onProgress: (progress) {
           _downloadProgress = progress;
           notifyListeners();
