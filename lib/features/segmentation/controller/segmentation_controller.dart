@@ -31,6 +31,7 @@ class SegmentationController extends ChangeNotifier {
   String? _poseModelPath;
   String? _errorMessage;
   List<YOLOResult> _currentDetections = const [];
+  List<YOLOResult> _poseDetections = const [];
   List<YOLOModelSpec> _yoloModels = const [];
   bool _flipMaskHorizontal = true;
   bool _flipMaskVertical = false;
@@ -66,6 +67,7 @@ class SegmentationController extends ChangeNotifier {
   String? get poseModelPath => _poseModelPath;
   String? get errorMessage => _errorMessage;
   List<YOLOResult> get detections => _currentDetections;
+  List<YOLOResult> get poseDetections => _poseDetections;
   List<YOLOModelSpec> get yoloModels => _yoloModels;
   bool get flipMaskHorizontal => _flipMaskHorizontal;
   bool get flipMaskVertical => _flipMaskVertical;
@@ -179,6 +181,13 @@ class SegmentationController extends ChangeNotifier {
   void onResults(List<YOLOResult> results) {
     ensurePreferredCamera();
     _currentDetections = results;
+    _poseDetections = results
+        .where(
+          (result) =>
+              (result.keypoints?.isNotEmpty ?? false) ||
+              result.modelName == ModelLoader.modelNamePose,
+        )
+        .toList(growable: false);
     notifyListeners();
   }
 
@@ -201,6 +210,7 @@ class SegmentationController extends ChangeNotifier {
     _modelPath = null;
     _poseModelPath = null;
     _currentDetections = const [];
+    _poseDetections = const [];
     _yoloModels = const [];
     await initialize();
   }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:ultralytics_yolo/yolo_view.dart';
 
 import '../controller/segmentation_controller.dart';
+import 'pose_mustache_overlay.dart';
 import 'segmentation_overlay.dart';
 
 class SegmentationCameraView extends StatelessWidget {
@@ -55,6 +56,10 @@ class SegmentationCameraView extends StatelessWidget {
               flipHorizontal: controller.flipMaskHorizontal,
               flipVertical: controller.flipMaskVertical,
             ),
+          ),
+        if (controller.poseDetections.isNotEmpty)
+          Positioned.fill(
+            child: PoseMustacheOverlay(detections: controller.poseDetections),
           ),
         Positioned(
           top: 16,
