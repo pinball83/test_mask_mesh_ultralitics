@@ -182,11 +182,7 @@ class SegmentationController extends ChangeNotifier {
     ensurePreferredCamera();
     _currentDetections = results;
     _poseDetections = results
-        .where(
-          (result) =>
-              result.modelName == ModelLoader.modelNamePose &&
-              (result.keypoints?.isNotEmpty ?? false),
-        )
+        .where((result) => result.keypoints?.isNotEmpty ?? false)
         .toList(growable: false);
     notifyListeners();
   }
