@@ -308,9 +308,9 @@ packages:
     dependency: "direct main"
     description:
       path: "."
-      ref: main
-      resolved-ref: b84ab5a17cb94ae9643c1d5aefa04997b480cce4
-      url: "https://github.com/ultralytics/yolo-flutter-app.git"
+      ref: "feature/refactor-loading-models"
+      resolved-ref: "301b963e8407e4dd59b2bd8c0b06a6ff162b9c42"
+      url: "https://github.com/pinball83/yolo-flutter-app.git"
     source: git
     version: "0.1.39"
   vector_math:

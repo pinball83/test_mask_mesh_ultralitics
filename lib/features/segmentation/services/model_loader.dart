@@ -13,8 +13,10 @@ typedef StatusCallback = void Function(String message);
 class ModelLoader {
   static const String modelNameSegmentation = 'yolo11n-seg';
   static const String modelNamePose = 'yolo11s-pose';
+  static const String modelNameRoot = 'yolo11n';
 
-  static const String _downloadBase = 'https://dn9skab9p5f1y.cloudfront.net';
+  static const String _downloadBase =
+      'https://github.com/ultralytics/yolo-flutter-app/releases/download/v0.0.0';
 
   static final MethodChannel _channel =
       ChannelConfig.createSingleImageChannel();

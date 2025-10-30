@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:ultralytics_yolo/models/yolo_task.dart';
 import 'package:ultralytics_yolo/yolo_view.dart';
 
 import '../controller/segmentation_controller.dart';
@@ -39,8 +38,7 @@ class SegmentationCameraView extends StatelessWidget {
           child: YOLOView(
             key: ValueKey(modelPath),
             controller: controller.yoloController,
-            modelPath: modelPath,
-            task: YOLOTask.segment,
+            models: controller.yoloModels,
             streamingConfig: controller.streamingConfig,
             showOverlays: false,
             onResult: controller.onResults,

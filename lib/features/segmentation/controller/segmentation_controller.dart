@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:ultralytics_yolo/models/yolo_model_spec.dart';
 import 'package:ultralytics_yolo/models/yolo_result.dart';
+import 'package:ultralytics_yolo/models/yolo_task.dart';
 import 'package:ultralytics_yolo/widgets/yolo_controller.dart';
 import 'package:ultralytics_yolo/yolo_performance_metrics.dart';
 import 'package:ultralytics_yolo/yolo_streaming_config.dart';
@@ -28,6 +30,7 @@ class SegmentationController extends ChangeNotifier {
   String? _modelPath;
   String? _errorMessage;
   List<YOLOResult> _currentDetections = const [];
+  List<YOLOModelSpec> _yoloModels = const [];
   bool _flipMaskHorizontal = true;
   bool _flipMaskVertical = false;
   final bool _preferFrontCamera = true;
@@ -49,6 +52,7 @@ class SegmentationController extends ChangeNotifier {
   String? get modelPath => _modelPath;
   String? get errorMessage => _errorMessage;
   List<YOLOResult> get detections => _currentDetections;
+  List<YOLOModelSpec> get yoloModels => _yoloModels;
   bool get flipMaskHorizontal => _flipMaskHorizontal;
   bool get flipMaskVertical => _flipMaskVertical;
 
@@ -69,7 +73,7 @@ class SegmentationController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      _modelPath = await _modelLoader.ensureSegmentationModel(
+      final path = await _modelLoader.ensureSegmentationModel(
         modelName: ModelLoader.modelNameSegmentation,
         onProgress: (progress) {
           _downloadProgress = progress;
@@ -81,9 +85,18 @@ class SegmentationController extends ChangeNotifier {
         },
       );
 
-      if (_modelPath == null) {
+      if (path == null) {
         throw Exception('Unable to locate segmentation model');
       }
+
+      _modelPath = path;
+      _yoloModels = [
+        YOLOModelSpec(
+          modelPath: path,
+          type: ModelLoader.modelNameSegmentation,
+          task: YOLOTask.segment,
+        ),
+      ];
 
       await yoloController.setThresholds(
         confidenceThreshold: _confidenceThreshold,
@@ -129,6 +142,7 @@ class SegmentationController extends ChangeNotifier {
   Future<void> refreshModel() async {
     _modelPath = null;
     _currentDetections = const [];
+    _yoloModels = const [];
     await initialize();
   }
 
