@@ -59,7 +59,11 @@ class SegmentationCameraView extends StatelessWidget {
           ),
         if (controller.poseDetections.isNotEmpty)
           Positioned.fill(
-            child: PoseMustacheOverlay(detections: controller.poseDetections),
+            child: PoseMustacheOverlay(
+              detections: controller.poseDetections,
+              flipHorizontal: controller.flipMaskHorizontal,
+              flipVertical: controller.flipMaskVertical,
+            ),
           ),
         Positioned(
           top: 16,

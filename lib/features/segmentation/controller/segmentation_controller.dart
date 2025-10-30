@@ -184,8 +184,8 @@ class SegmentationController extends ChangeNotifier {
     _poseDetections = results
         .where(
           (result) =>
-              (result.keypoints?.isNotEmpty ?? false) ||
-              result.modelName == ModelLoader.modelNamePose,
+              result.modelName == ModelLoader.modelNamePose &&
+              (result.keypoints?.isNotEmpty ?? false),
         )
         .toList(growable: false);
     notifyListeners();
