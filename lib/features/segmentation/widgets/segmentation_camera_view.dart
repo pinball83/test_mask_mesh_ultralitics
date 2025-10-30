@@ -29,6 +29,7 @@ class SegmentationCameraView extends StatelessWidget {
     if (modelPath == null) {
       return const _ErrorState(message: 'Segmentation model not available.');
     }
+    final poseModelPath = controller.poseModelPath;
 
     controller.ensurePreferredCamera();
 
@@ -36,7 +37,7 @@ class SegmentationCameraView extends StatelessWidget {
       children: [
         Positioned.fill(
           child: YOLOView(
-            key: ValueKey(modelPath),
+            key: ValueKey('${modelPath}_${poseModelPath ?? ''}'),
             controller: controller.yoloController,
             models: controller.yoloModels,
             streamingConfig: controller.streamingConfig,

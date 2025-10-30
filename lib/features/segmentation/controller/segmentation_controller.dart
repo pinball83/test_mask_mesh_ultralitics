@@ -28,6 +28,7 @@ class SegmentationController extends ChangeNotifier {
   String _statusMessage = 'Preparing segmentation model...';
   double _downloadProgress = 0.0;
   String? _modelPath;
+  String? _poseModelPath;
   String? _errorMessage;
   List<YOLOResult> _currentDetections = const [];
   List<YOLOModelSpec> _yoloModels = const [];
@@ -37,8 +38,20 @@ class SegmentationController extends ChangeNotifier {
   bool _defaultCameraApplied = false;
   Timer? _cameraRetryTimer;
 
-  YOLOStreamingConfig get streamingConfig =>
-      const YOLOStreamingConfig.withMasks();
+  YOLOStreamingConfig get streamingConfig => const YOLOStreamingConfig.custom(
+    includeDetections: true,
+    includeClassifications: false,
+    includeProcessingTimeMs: true,
+    includeFps: true,
+    includeMasks: true,
+    includePoses: true,
+    includeOBB: false,
+    includeOriginalImage: false,
+    maxFPS: null,
+    throttleInterval: null,
+    inferenceFrequency: null,
+    skipFrames: null,
+  );
 
   bool get isLoading => _isLoading;
   bool get isUnsupportedPlatform => _isUnsupportedPlatform;
@@ -50,6 +63,7 @@ class SegmentationController extends ChangeNotifier {
   String get statusMessage => _statusMessage;
   double get downloadProgress => _downloadProgress;
   String? get modelPath => _modelPath;
+  String? get poseModelPath => _poseModelPath;
   String? get errorMessage => _errorMessage;
   List<YOLOResult> get detections => _currentDetections;
   List<YOLOModelSpec> get yoloModels => _yoloModels;
@@ -70,14 +84,28 @@ class SegmentationController extends ChangeNotifier {
     _statusMessage = 'Fetching segmentation model...';
     _isLoading = true;
     _errorMessage = null;
+    _downloadProgress = 0;
     notifyListeners();
 
     try {
-      final path = await _modelLoader.ensureSegmentationModel(
+      const totalStages = 2;
+      var currentStage = 0;
+
+      void setStageProgress(double stageProgress) {
+        final normalized = ((currentStage + stageProgress) / totalStages).clamp(
+          0.0,
+          1.0,
+        );
+        if ((_downloadProgress - normalized).abs() > 0.001) {
+          _downloadProgress = normalized;
+          notifyListeners();
+        }
+      }
+
+      final segmentationPath = await _modelLoader.ensureSegmentationModel(
         modelName: ModelLoader.modelNameSegmentation,
         onProgress: (progress) {
-          _downloadProgress = progress;
-          notifyListeners();
+          setStageProgress(progress);
         },
         onStatus: (status) {
           _statusMessage = status;
@@ -85,16 +113,46 @@ class SegmentationController extends ChangeNotifier {
         },
       );
 
-      if (path == null) {
+      setStageProgress(1);
+      currentStage = 1;
+
+      if (segmentationPath == null) {
         throw Exception('Unable to locate segmentation model');
       }
 
-      _modelPath = path;
+      _statusMessage = 'Fetching pose model...';
+      notifyListeners();
+
+      final posePath = await _modelLoader.ensureSegmentationModel(
+        modelName: ModelLoader.modelNamePose,
+        onProgress: (progress) {
+          setStageProgress(progress);
+        },
+        onStatus: (status) {
+          _statusMessage = status;
+          notifyListeners();
+        },
+      );
+
+      setStageProgress(1);
+      currentStage = 2;
+
+      if (posePath == null) {
+        throw Exception('Unable to locate pose model');
+      }
+
+      _modelPath = segmentationPath;
+      _poseModelPath = posePath;
       _yoloModels = [
         YOLOModelSpec(
-          modelPath: path,
+          modelPath: segmentationPath,
           type: ModelLoader.modelNameSegmentation,
           task: YOLOTask.segment,
+        ),
+        YOLOModelSpec(
+          modelPath: posePath,
+          type: ModelLoader.modelNamePose,
+          task: YOLOTask.pose,
         ),
       ];
 
@@ -141,6 +199,7 @@ class SegmentationController extends ChangeNotifier {
 
   Future<void> refreshModel() async {
     _modelPath = null;
+    _poseModelPath = null;
     _currentDetections = const [];
     _yoloModels = const [];
     await initialize();

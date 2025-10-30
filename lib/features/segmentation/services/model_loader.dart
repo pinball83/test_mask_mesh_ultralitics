@@ -9,11 +9,10 @@ import 'package:ultralytics_yolo/config/channel_config.dart';
 typedef ProgressCallback = void Function(double progress);
 typedef StatusCallback = void Function(String message);
 
-/// Handles locating, downloading, and caching the segmentation model.
+/// Handles locating, downloading, and caching YOLO models needed at runtime.
 class ModelLoader {
   static const String modelNameSegmentation = 'yolo11n-seg';
-  static const String modelNamePose = 'yolo11s-pose';
-  static const String modelNameRoot = 'yolo11n';
+  static const String modelNamePose = 'yolo11n-pose';
 
   static const String _downloadBase =
       'https://github.com/ultralytics/yolo-flutter-app/releases/download/v0.0.0';
@@ -75,7 +74,7 @@ class ModelLoader {
       return target.path;
     }
 
-    onStatus?.call('Downloading segmentation model...');
+    onStatus?.call('Downloading $modelName...');
     final bytes = await _downloadFile(
       '$_downloadBase/$assetName',
       onProgress: onProgress,
@@ -121,7 +120,7 @@ class ModelLoader {
       await modelDir.delete(recursive: true);
     }
 
-    onStatus?.call('Downloading segmentation model...');
+    onStatus?.call('Downloading $modelName...');
     final bytes = await _downloadFile(
       '$_downloadBase/$bundleName.zip',
       onProgress: onProgress,
