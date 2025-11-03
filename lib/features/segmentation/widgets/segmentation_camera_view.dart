@@ -2,8 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:ultralytics_yolo/yolo_view.dart';
 
 import '../controller/segmentation_controller.dart';
-import 'pose_mustache_overlay.dart';
-import 'segmentation_overlay.dart';
+import 'selfie_shader_overlay.dart';
 
 class SegmentationCameraView extends StatelessWidget {
   const SegmentationCameraView({super.key, required this.controller});
@@ -50,21 +49,14 @@ class SegmentationCameraView extends StatelessWidget {
         ),
         if (controller.showMasks)
           Positioned.fill(
-            child: SegmentationOverlay(
+            child: SelfieShaderOverlay(
               detections: controller.detections,
-              maskThreshold: controller.maskThreshold,
+              poseDetections: controller.poseDetections,
               flipHorizontal: controller.flipMaskHorizontal,
               flipVertical: controller.flipMaskVertical,
-            ),
-          ),
-        if (controller.poseDetections.isNotEmpty)
-          Positioned.fill(
-            child: PoseMustacheOverlay(
-              detections: controller.poseDetections,
-              // Use the same flip flags as mask to mirror front camera.
-              flipHorizontal: controller.flipMaskHorizontal,
-              flipVertical: controller.flipMaskVertical,
-              debug: true,
+              mode: 1.0, // keep mask-cut mode
+              mustacheAlpha: 1.0,
+              mustacheScale: 0.12,
             ),
           ),
         Positioned(
