@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:ultralytics_yolo/models/yolo_result.dart';
@@ -349,70 +350,43 @@ class _SelfieShaderPainter extends CustomPainter {
   }
 
   _FaceUniformData _resolveFaceData(Size canvasSize) {
-    final fallbackWidth = srcW ?? canvasSize.width;
-    final fallbackHeight = srcH ?? canvasSize.height;
+    final imageWidth = canvasSize.width > 0 ? canvasSize.width : (srcW ?? 1.0);
+    final imageHeight = canvasSize.height > 0
+        ? canvasSize.height
+        : (srcH ?? 1.0);
 
     final poseDetection = _pickPrimaryPose(poseDetections, canvasSize);
-    final baseDetection = poseDetection ?? _pickPrimaryMask(detections);
+    final maskDetection = _pickPrimaryMask(detections);
+    final baseDetection = poseDetection ?? maskDetection;
 
-    if (baseDetection == null) {
-      return _FaceUniformData(
-        imageWidth: fallbackWidth,
-        imageHeight: fallbackHeight,
-        faceRect: null,
-        noseBridgeStart: null,
-        noseBridgeEnd: null,
-        upperLipCenter: null,
-      );
+    Rect? faceRect;
+    if (baseDetection != null && !baseDetection.boundingBox.isEmpty) {
+      faceRect = _clampRectToCanvas(baseDetection.boundingBox, canvasSize);
     }
-
-    final imageWidth = _resolveImageWidth(baseDetection) ?? fallbackWidth;
-    final imageHeight = _resolveImageHeight(baseDetection) ?? fallbackHeight;
-    Rect? faceRect = _rectFromNormalized(
-      baseDetection.normalizedBox,
-      imageWidth,
-      imageHeight,
-    );
 
     Offset? noseBridgeStart;
     Offset? noseBridgeEnd;
     Offset? upperLipCenter;
 
     if (poseDetection != null) {
-      final poseImageWidth = _resolveImageWidth(poseDetection) ?? imageWidth;
-      final poseImageHeight = _resolveImageHeight(poseDetection) ?? imageHeight;
-      final poseRect = _rectFromNormalized(
-        poseDetection.normalizedBox,
-        poseImageWidth,
-        poseImageHeight,
-      );
-      final landmarks = _computePoseLandmarks(
+      final landmarks = _extractPoseLandmarks(
         detection: poseDetection,
-        imageWidth: poseImageWidth,
-        imageHeight: poseImageHeight,
-        fallbackRect: poseRect ?? faceRect,
+        canvasSize: canvasSize,
+        seedRect: faceRect,
       );
-
       faceRect ??= landmarks.faceRect;
       noseBridgeStart = landmarks.noseBridgeStart;
       noseBridgeEnd = landmarks.noseBridgeEnd;
       upperLipCenter = landmarks.upperLipCenter;
     }
 
-    faceRect ??=
-        _rectFromNormalized(
-          baseDetection.normalizedBox,
-          imageWidth,
-          imageHeight,
-        ) ??
-        _rectFromBoundingBox(
-          baseDetection.boundingBox,
-          baseDetection.normalizedBox,
-          imageWidth,
-          imageHeight,
-        );
+    if (faceRect == null &&
+        maskDetection != null &&
+        !maskDetection.boundingBox.isEmpty) {
+      faceRect = _clampRectToCanvas(maskDetection.boundingBox, canvasSize);
+    }
 
-    if (faceRect == null || faceRect.isEmpty) {
+    if (faceRect == Rect.zero) {
       faceRect = null;
     }
 
@@ -483,90 +457,41 @@ class _SelfieShaderPainter extends CustomPainter {
     return best;
   }
 
-  double? _resolveImageWidth(YOLOResult detection) {
-    final nb = detection.normalizedBox;
-    if (nb.width > 0 && detection.boundingBox.width > 0) {
-      final value = detection.boundingBox.width / nb.width;
-      if (value.isFinite && value > 0) {
-        return value;
-      }
+  Rect _clampRectToCanvas(Rect rect, Size size) {
+    final left = rect.left.clamp(0.0, size.width);
+    final top = rect.top.clamp(0.0, size.height);
+    final right = rect.right.clamp(0.0, size.width);
+    final bottom = rect.bottom.clamp(0.0, size.height);
+    if (right <= left || bottom <= top) {
+      return Rect.zero;
     }
-    return null;
+    return Rect.fromLTRB(left, top, right, bottom);
   }
 
-  double? _resolveImageHeight(YOLOResult detection) {
-    final nb = detection.normalizedBox;
-    if (nb.height > 0 && detection.boundingBox.height > 0) {
-      final value = detection.boundingBox.height / nb.height;
-      if (value.isFinite && value > 0) {
-        return value;
-      }
-    }
-    return null;
-  }
-
-  Rect? _rectFromNormalized(
-    Rect normalized,
-    double imageWidth,
-    double imageHeight,
-  ) {
-    if (normalized.width <= 0 || normalized.height <= 0) return null;
-    return Rect.fromLTRB(
-      normalized.left * imageWidth,
-      normalized.top * imageHeight,
-      normalized.right * imageWidth,
-      normalized.bottom * imageHeight,
-    );
-  }
-
-  Rect? _rectFromBoundingBox(
-    Rect viewBox,
-    Rect normalized,
-    double imageWidth,
-    double imageHeight,
-  ) {
-    if (viewBox.isEmpty || normalized.width <= 0 || normalized.height <= 0) {
-      return null;
-    }
-    final rect = _rectFromNormalized(normalized, imageWidth, imageHeight);
-    return rect;
-  }
-
-  _PoseLandmarks _computePoseLandmarks({
+  _PoseLandmarks _extractPoseLandmarks({
     required YOLOResult detection,
-    required double imageWidth,
-    required double imageHeight,
-    Rect? fallbackRect,
+    required Size canvasSize,
+    Rect? seedRect,
   }) {
-    final keypoints = detection.keypoints;
-    final confidences = detection.keypointConfidences;
-    Rect? faceRect = _rectFromNormalized(
-      detection.normalizedBox,
-      imageWidth,
-      imageHeight,
-    );
-    faceRect ??= fallbackRect;
+    Rect? faceRect = seedRect;
+    if (faceRect == null && !detection.boundingBox.isEmpty) {
+      faceRect = _clampRectToCanvas(detection.boundingBox, canvasSize);
+    }
 
+    final keypoints = detection.keypoints;
     if (keypoints == null || keypoints.isEmpty) {
       return _PoseLandmarks(faceRect: faceRect);
     }
 
-    final points = List<_PosePoint?>.generate(keypoints.length, (index) {
-      final p = keypoints[index];
-      final confidence = (confidences != null && index < confidences.length)
-          ? confidences[index]
-          : 1.0;
-      if (confidence.isNaN) return null;
-      final position = _convertKeypointToImage(
-        point: p,
-        bboxView: detection.boundingBox,
-        bboxNormalized: detection.normalizedBox,
-        imageWidth: imageWidth,
-        imageHeight: imageHeight,
-      );
-      if (position == null) return null;
-      return _PosePoint(position: position, confidence: confidence);
-    }, growable: false);
+    final points = List<_PosePoint?>.generate(
+      keypoints.length,
+      (index) => _mapPosePoint(
+        detection: detection,
+        index: index,
+        canvasSize: canvasSize,
+      ),
+      growable: false,
+    );
 
     Offset? noseBridgeEnd;
     final nose = _pointWithThreshold(points, 0, _noseThreshold);
@@ -586,17 +511,15 @@ class _SelfieShaderPainter extends CustomPainter {
 
     Offset? upperLipCenter;
     if (noseBridgeEnd != null && faceRect != null) {
-      final nosePoint = noseBridgeEnd;
       final verticalLimit = faceRect.height * 0.35;
       final horizontalLimit = faceRect.width * 0.45;
-
       final candidates = <_PosePoint>[];
       for (final pt in points) {
         if (pt == null || pt.confidence < _candidateThreshold) continue;
         final pos = pt.position;
-        if (pos.dy <= nosePoint.dy) continue;
-        if (pos.dy > nosePoint.dy + verticalLimit) continue;
-        if ((pos.dx - nosePoint.dx).abs() > horizontalLimit) continue;
+        if (pos.dy <= noseBridgeEnd.dy) continue;
+        if (pos.dy > noseBridgeEnd.dy + verticalLimit) continue;
+        if ((pos.dx - noseBridgeEnd.dx).abs() > horizontalLimit) continue;
         candidates.add(pt);
       }
 
@@ -613,14 +536,10 @@ class _SelfieShaderPainter extends CustomPainter {
           );
         } else {
           final avgX =
-              candidates
-                  .map((pt) => pt.position.dx)
-                  .fold<double>(0, (sum, v) => sum + v) /
+              candidates.fold<double>(0, (sum, e) => sum + e.position.dx) /
               candidates.length;
           final avgY =
-              candidates
-                  .map((pt) => pt.position.dy)
-                  .fold<double>(0, (sum, v) => sum + v) /
+              candidates.fold<double>(0, (sum, e) => sum + e.position.dy) /
               candidates.length;
           upperLipCenter = Offset(avgX, avgY);
         }
@@ -635,6 +554,54 @@ class _SelfieShaderPainter extends CustomPainter {
     );
   }
 
+  _PosePoint? _mapPosePoint({
+    required YOLOResult detection,
+    required int index,
+    required Size canvasSize,
+  }) {
+    final keypoints = detection.keypoints;
+    final confidences = detection.keypointConfidences;
+    if (keypoints == null || index < 0 || index >= keypoints.length) {
+      return null;
+    }
+    final confidence = (confidences != null && index < confidences.length)
+        ? confidences[index]
+        : 1.0;
+    if (confidence.isNaN) return null;
+
+    final mapped = _convertPosePoint(
+      detection: detection,
+      point: keypoints[index],
+    );
+    if (mapped == null) return null;
+
+    final clamped = Offset(
+      mapped.dx.clamp(0.0, canvasSize.width),
+      mapped.dy.clamp(0.0, canvasSize.height),
+    );
+    return _PosePoint(position: clamped, confidence: confidence);
+  }
+
+  Offset? _convertPosePoint({
+    required YOLOResult detection,
+    required Point point,
+  }) {
+    final looksNormalized =
+        point.x >= 0.0 && point.x <= 1.0 && point.y >= 0.0 && point.y <= 1.0;
+    if (looksNormalized && !detection.boundingBox.isEmpty) {
+      final bbox = detection.boundingBox;
+      return Offset(
+        bbox.left + point.x * bbox.width,
+        bbox.top + point.y * bbox.height,
+      );
+    }
+
+    if (point.x.isFinite && point.y.isFinite) {
+      return Offset(point.x.toDouble(), point.y.toDouble());
+    }
+    return null;
+  }
+
   _PosePoint? _pointWithThreshold(
     List<_PosePoint?> list,
     int index,
@@ -646,43 +613,6 @@ class _SelfieShaderPainter extends CustomPainter {
     if (pt.confidence < threshold) return null;
     if (!pt.position.dx.isFinite || !pt.position.dy.isFinite) return null;
     return pt;
-  }
-
-  Offset? _convertKeypointToImage({
-    required Point point,
-    required Rect bboxView,
-    required Rect bboxNormalized,
-    required double imageWidth,
-    required double imageHeight,
-  }) {
-    final isNormalized =
-        point.x >= 0.0 && point.x <= 1.0 && point.y >= 0.0 && point.y <= 1.0;
-    if (isNormalized) {
-      final rect = _rectFromNormalized(bboxNormalized, imageWidth, imageHeight);
-      if (rect == null) return null;
-      return Offset(
-        rect.left + point.x * rect.width,
-        rect.top + point.y * rect.height,
-      );
-    }
-
-    final rect = _rectFromNormalized(bboxNormalized, imageWidth, imageHeight);
-    if (rect != null && !bboxView.isEmpty) {
-      final scaleX = bboxView.width / (rect.width == 0 ? 1 : rect.width);
-      final scaleY = bboxView.height / (rect.height == 0 ? 1 : rect.height);
-      if (scaleX != 0 && scaleY != 0) {
-        final x = (point.x.toDouble() - bboxView.left) / scaleX + rect.left;
-        final y = (point.y.toDouble() - bboxView.top) / scaleY + rect.top;
-        if (x.isFinite && y.isFinite) {
-          return Offset(x, y);
-        }
-      }
-    }
-
-    if (point.x.isFinite && point.y.isFinite) {
-      return Offset(point.x.toDouble(), point.y.toDouble());
-    }
-    return null;
   }
 
   @override
