@@ -61,8 +61,10 @@ class SegmentationCameraView extends StatelessWidget {
           Positioned.fill(
             child: PoseMustacheOverlay(
               detections: controller.poseDetections,
+              // Use the same flip flags as mask to mirror front camera.
               flipHorizontal: controller.flipMaskHorizontal,
               flipVertical: controller.flipMaskVertical,
+              debug: true,
             ),
           ),
         Positioned(
