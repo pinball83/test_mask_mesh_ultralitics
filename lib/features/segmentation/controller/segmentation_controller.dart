@@ -46,8 +46,8 @@ class SegmentationController extends ChangeNotifier {
     includeClassifications: false,
     includeProcessingTimeMs: true,
     includeFps: true,
-    includeMasks: true,
-    includePoses: _overlayMode == SegmentationOverlayMode.combined,
+    includeMasks: _overlayMode != SegmentationOverlayMode.maskOnly,
+    includePoses: _overlayMode != SegmentationOverlayMode.backgroundReplacement,
     includeOBB: false,
     includeOriginalImage: false,
     maxFPS: null,
@@ -172,7 +172,7 @@ class SegmentationController extends ChangeNotifier {
   void onResults(List<YOLOResult> results) {
     ensurePreferredCamera();
     _currentDetections = results;
-    if (_overlayMode == SegmentationOverlayMode.combined) {
+    if (_overlayMode != SegmentationOverlayMode.backgroundReplacement) {
       _poseDetections = results
           .where((result) => result.keypoints?.isNotEmpty ?? false)
           .toList(growable: false);
@@ -209,7 +209,7 @@ class SegmentationController extends ChangeNotifier {
   void setOverlayMode(SegmentationOverlayMode mode) {
     if (_overlayMode == mode) return;
     _overlayMode = mode;
-    if (mode != SegmentationOverlayMode.combined) {
+    if (mode == SegmentationOverlayMode.backgroundReplacement) {
       _poseDetections = const [];
     }
     _applyOverlayModeModels();
@@ -279,25 +279,58 @@ class SegmentationController extends ChangeNotifier {
     final segPath = _modelPath;
     if (segPath == null) return;
 
-    final models = <YOLOModelSpec>[
-      YOLOModelSpec(
-        modelPath: segPath,
-        type: ModelLoader.modelNameSegmentation,
-        task: YOLOTask.segment,
-      ),
-    ];
+    final posePath = _poseModelPath;
 
-    if (_overlayMode == SegmentationOverlayMode.combined) {
-      final posePath = _poseModelPath;
-      if (posePath != null) {
-        models.add(
+    List<YOLOModelSpec> models;
+
+    switch (_overlayMode) {
+      case SegmentationOverlayMode.backgroundReplacement:
+        models = [
           YOLOModelSpec(
-            modelPath: posePath,
-            type: ModelLoader.modelNamePose,
-            task: YOLOTask.pose,
+            modelPath: segPath,
+            type: ModelLoader.modelNameSegmentation,
+            task: YOLOTask.segment,
           ),
-        );
-      }
+        ];
+        break;
+      case SegmentationOverlayMode.maskOnly:
+        if (posePath != null) {
+          models = [
+            YOLOModelSpec(
+              modelPath: posePath,
+              type: ModelLoader.modelNamePose,
+              task: YOLOTask.pose,
+            ),
+          ];
+        } else {
+          models = [
+            YOLOModelSpec(
+              modelPath: segPath,
+              type: ModelLoader.modelNameSegmentation,
+              task: YOLOTask.segment,
+            ),
+          ];
+        }
+        break;
+      case SegmentationOverlayMode.combined:
+        models = [
+          YOLOModelSpec(
+            modelPath: segPath,
+            type: ModelLoader.modelNameSegmentation,
+            task: YOLOTask.segment,
+          ),
+        ];
+        if (posePath != null) {
+          models = [
+            ...models,
+            YOLOModelSpec(
+              modelPath: posePath,
+              type: ModelLoader.modelNamePose,
+              task: YOLOTask.pose,
+            ),
+          ];
+        }
+        break;
     }
 
     _yoloModels = models;

@@ -81,12 +81,14 @@ List<Widget> _buildOverlays(SegmentationController controller) {
     case SegmentationOverlayMode.maskOnly:
       overlays.add(
         Positioned.fill(
-          child: SegmentationOverlay(
+          child: SelfieShaderOverlay(
             detections: controller.detections,
-            maskThreshold: controller.maskThreshold,
+            poseDetections: controller.poseDetections,
             flipHorizontal: controller.flipMaskHorizontal,
             flipVertical: controller.flipMaskVertical,
-            backgroundAsset: null,
+            mustacheAlpha: 1.0,
+            showMustache: true,
+            debugPose: true,
           ),
         ),
       );
@@ -112,6 +114,7 @@ List<Widget> _buildOverlays(SegmentationController controller) {
             flipVertical: controller.flipMaskVertical,
             mustacheAlpha: 1.0,
             debugPose: true,
+            showMustache: true,
           ),
         ),
       );

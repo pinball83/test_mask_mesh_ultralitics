@@ -16,6 +16,7 @@ class SelfieShaderOverlay extends StatefulWidget {
     this.mustacheAsset = 'assets/images/mustash.png',
     this.mustacheAlpha = 1.0,
     this.debugPose = false,
+    this.showMustache = true,
   });
 
   final List<YOLOResult> detections;
@@ -25,6 +26,7 @@ class SelfieShaderOverlay extends StatefulWidget {
   final String mustacheAsset;
   final double mustacheAlpha;
   final bool debugPose;
+  final bool showMustache;
 
   @override
   State<SelfieShaderOverlay> createState() => _SelfieShaderOverlayState();
@@ -132,6 +134,7 @@ class _SelfieShaderOverlayState extends State<SelfieShaderOverlay> {
           sourceWidth: _srcW,
           sourceHeight: _srcH,
           debugPose: widget.debugPose,
+          showMustache: widget.showMustache,
         ),
       ),
     );
@@ -149,6 +152,7 @@ class _PoseOverlayPainter extends CustomPainter {
     required this.sourceWidth,
     required this.sourceHeight,
     required this.debugPose,
+    required this.showMustache,
   });
 
   final List<YOLOResult> detections;
@@ -160,6 +164,7 @@ class _PoseOverlayPainter extends CustomPainter {
   final double? sourceWidth;
   final double? sourceHeight;
   final bool debugPose;
+  final bool showMustache;
 
   static const double _minMustacheWidth = 24;
   static const double _maxMustacheWidthFactor = 0.6;
@@ -258,6 +263,7 @@ class _PoseOverlayPainter extends CustomPainter {
     Offset? nose,
     Offset? noseBridgeEnd,
   }) {
+    if (!showMustache) return;
     final image = mustacheImage;
     if (image == null) return;
 
