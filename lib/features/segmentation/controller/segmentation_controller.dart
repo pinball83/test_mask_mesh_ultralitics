@@ -41,13 +41,13 @@ class SegmentationController extends ChangeNotifier {
   bool _defaultCameraApplied = false;
   Timer? _cameraRetryTimer;
 
-  YOLOStreamingConfig get streamingConfig => const YOLOStreamingConfig.custom(
+  YOLOStreamingConfig get streamingConfig => YOLOStreamingConfig.custom(
     includeDetections: true,
     includeClassifications: false,
     includeProcessingTimeMs: true,
     includeFps: true,
     includeMasks: true,
-    includePoses: true,
+    includePoses: _overlayMode == SegmentationOverlayMode.combined,
     includeOBB: false,
     includeOriginalImage: false,
     maxFPS: null,
@@ -147,18 +147,7 @@ class SegmentationController extends ChangeNotifier {
 
       _modelPath = segmentationPath;
       _poseModelPath = posePath;
-      _yoloModels = [
-        YOLOModelSpec(
-          modelPath: segmentationPath,
-          type: ModelLoader.modelNameSegmentation,
-          task: YOLOTask.segment,
-        ),
-        YOLOModelSpec(
-          modelPath: posePath,
-          type: ModelLoader.modelNamePose,
-          task: YOLOTask.pose,
-        ),
-      ];
+      _applyOverlayModeModels();
 
       await yoloController.setThresholds(
         confidenceThreshold: _confidenceThreshold,
@@ -183,9 +172,13 @@ class SegmentationController extends ChangeNotifier {
   void onResults(List<YOLOResult> results) {
     ensurePreferredCamera();
     _currentDetections = results;
-    _poseDetections = results
-        .where((result) => result.keypoints?.isNotEmpty ?? false)
-        .toList(growable: false);
+    if (_overlayMode == SegmentationOverlayMode.combined) {
+      _poseDetections = results
+          .where((result) => result.keypoints?.isNotEmpty ?? false)
+          .toList(growable: false);
+    } else {
+      _poseDetections = const [];
+    }
     notifyListeners();
   }
 
@@ -216,6 +209,10 @@ class SegmentationController extends ChangeNotifier {
   void setOverlayMode(SegmentationOverlayMode mode) {
     if (_overlayMode == mode) return;
     _overlayMode = mode;
+    if (mode != SegmentationOverlayMode.combined) {
+      _poseDetections = const [];
+    }
+    _applyOverlayModeModels();
     notifyListeners();
   }
 
@@ -276,6 +273,34 @@ class SegmentationController extends ChangeNotifier {
       _cameraRetryTimer = null;
       ensurePreferredCamera();
     });
+  }
+
+  void _applyOverlayModeModels() {
+    final segPath = _modelPath;
+    if (segPath == null) return;
+
+    final models = <YOLOModelSpec>[
+      YOLOModelSpec(
+        modelPath: segPath,
+        type: ModelLoader.modelNameSegmentation,
+        task: YOLOTask.segment,
+      ),
+    ];
+
+    if (_overlayMode == SegmentationOverlayMode.combined) {
+      final posePath = _poseModelPath;
+      if (posePath != null) {
+        models.add(
+          YOLOModelSpec(
+            modelPath: posePath,
+            type: ModelLoader.modelNamePose,
+            task: YOLOTask.pose,
+          ),
+        );
+      }
+    }
+
+    _yoloModels = models;
   }
 
   @override
