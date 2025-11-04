@@ -1,14 +1,11 @@
-import 'dart:async';
 import 'dart:math' as math;
-import 'dart:typed_data';
 import 'dart:ui' as ui;
-import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:ultralytics_yolo/models/yolo_result.dart';
 
-/// GPU-accelerated overlay that uses `assets/shaders/selfie_shader.frag`
-/// to replace background by segmentation mask and draw a mustache overlay.
+/// Pose-driven overlay that draws facial debug markers and a mustache sprite.
+/// The name is kept for backwards compatibility with the previous shader-based implementation.
 class SelfieShaderOverlay extends StatefulWidget {
   const SelfieShaderOverlay({
     super.key,
@@ -16,11 +13,8 @@ class SelfieShaderOverlay extends StatefulWidget {
     required this.poseDetections,
     required this.flipHorizontal,
     required this.flipVertical,
-    this.mode = 1.0, // 0 off, 1 mask, 2 replace bg (same in shader)
-    this.mustacheAlpha = 1.0,
-    this.mustacheScale = 0.12,
-    this.backgroundAsset = 'assets/images/bg_image.jpg',
     this.mustacheAsset = 'assets/images/mustash.png',
+    this.mustacheAlpha = 1.0,
     this.debugPose = false,
   });
 
@@ -28,12 +22,8 @@ class SelfieShaderOverlay extends StatefulWidget {
   final List<YOLOResult> poseDetections;
   final bool flipHorizontal;
   final bool flipVertical;
-
-  final double mode;
-  final double mustacheAlpha;
-  final double mustacheScale;
-  final String backgroundAsset;
   final String mustacheAsset;
+  final double mustacheAlpha;
   final bool debugPose;
 
   @override
@@ -41,134 +31,71 @@ class SelfieShaderOverlay extends StatefulWidget {
 }
 
 class _SelfieShaderOverlayState extends State<SelfieShaderOverlay> {
-  ui.FragmentProgram? _program;
-  ui.Image? _bgImage;
   ui.Image? _mustacheImage;
-  ui.Image? _maskImage; // Combined or primary mask to pass to shader
+  ImageStream? _mustacheStream;
+  ImageStreamListener? _mustacheListener;
 
-  ImageStream? _bgStream;
-  ImageStreamListener? _bgListener;
-  ImageStream? _stashStream;
-  ImageStreamListener? _stashListener;
-
-  // Cache last mask source dims for uniforms.
   double? _srcW;
   double? _srcH;
 
   @override
   void initState() {
     super.initState();
-    _loadProgram();
-    _resolveImages();
-    _rebuildMaskImage();
+    _resolveMustache();
+    _updateSourceSize();
   }
 
   @override
   void didUpdateWidget(covariant SelfieShaderOverlay oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.backgroundAsset != widget.backgroundAsset ||
-        oldWidget.mustacheAsset != widget.mustacheAsset) {
-      _resolveImages();
+    if (oldWidget.mustacheAsset != widget.mustacheAsset) {
+      _resolveMustache();
     }
     if (!identical(oldWidget.detections, widget.detections)) {
-      _rebuildMaskImage();
+      _updateSourceSize();
     }
   }
 
   @override
   void dispose() {
-    _disposeImageStreams();
+    _disposeMustacheStream();
     super.dispose();
   }
 
-  Future<void> _loadProgram() async {
-    try {
-      final p = await ui.FragmentProgram.fromAsset(
-        'assets/shaders/selfie_shader.frag',
-      );
-      if (mounted) setState(() => _program = p);
-    } catch (e) {
-      // Silently ignore; painter will skip if null.
-    }
-  }
-
-  void _resolveImages() {
-    _disposeImageStreams();
-
-    // Background
-    final bgProvider = AssetImage(widget.backgroundAsset);
-    final bgStream = bgProvider.resolve(ImageConfiguration.empty);
-    _bgStream = bgStream;
-    _bgListener = ImageStreamListener((imageInfo, _) {
-      if (mounted) setState(() => _bgImage = imageInfo.image);
-    });
-    bgStream.addListener(_bgListener!);
-
-    // Mustache
-    final stashProvider = AssetImage(widget.mustacheAsset);
-    final stashStream = stashProvider.resolve(ImageConfiguration.empty);
-    _stashStream = stashStream;
-    _stashListener = ImageStreamListener((imageInfo, _) {
-      if (mounted) setState(() => _mustacheImage = imageInfo.image);
-    });
-    stashStream.addListener(_stashListener!);
-  }
-
-  void _disposeImageStreams() {
-    if (_bgStream != null && _bgListener != null) {
-      _bgStream!.removeListener(_bgListener!);
-    }
-    if (_stashStream != null && _stashListener != null) {
-      _stashStream!.removeListener(_stashListener!);
-    }
-    _bgStream = null;
-    _bgListener = null;
-    _stashStream = null;
-    _stashListener = null;
-  }
-
-  void _rebuildMaskImage() {
-    // Pick the largest detection with a valid mask and use it as texture.
-    final detection = _pickPrimary(widget.detections);
-    if (detection == null ||
-        detection.mask == null ||
-        detection.mask!.isEmpty) {
-      if (mounted) setState(() => _maskImage = null);
-      return;
-    }
-    final mask = detection.mask!;
-    _srcW = _estimateSourceWidth(widget.detections);
-    _srcH = _estimateSourceHeight(widget.detections);
-
-    _maskFrom2D(mask).then((img) {
-      if (!mounted) return;
-      setState(() => _maskImage = img);
-    });
-  }
-
-  YOLOResult? _pickPrimary(List<YOLOResult> list) {
-    YOLOResult? best;
-    var bestArea = -1.0;
-    for (final d in list) {
-      final m = d.mask;
-      final b = d.boundingBox;
-      if (m == null || m.isEmpty || b.isEmpty) continue;
-      final area = (b.width * b.height).abs();
-      if (area > bestArea) {
-        bestArea = area;
-        best = d;
+  void _resolveMustache() {
+    _disposeMustacheStream();
+    final provider = AssetImage(widget.mustacheAsset);
+    final stream = provider.resolve(ImageConfiguration.empty);
+    _mustacheStream = stream;
+    _mustacheListener = ImageStreamListener((imageInfo, _) {
+      if (mounted) {
+        setState(() => _mustacheImage = imageInfo.image);
       }
+    });
+    stream.addListener(_mustacheListener!);
+  }
+
+  void _disposeMustacheStream() {
+    if (_mustacheStream != null && _mustacheListener != null) {
+      _mustacheStream!.removeListener(_mustacheListener!);
     }
-    return best;
+    _mustacheStream = null;
+    _mustacheListener = null;
+  }
+
+  void _updateSourceSize() {
+    setState(() {
+      _srcW = _estimateSourceWidth(widget.detections);
+      _srcH = _estimateSourceHeight(widget.detections);
+    });
   }
 
   double? _estimateSourceWidth(List<YOLOResult> list) {
     for (final d in list) {
       final nb = d.normalizedBox;
-      final b = d.boundingBox;
-      final w = nb.width;
-      if (w > 0 && b.width > 0 && w.isFinite) {
-        final candidate = b.width / w;
+      final bb = d.boundingBox;
+      if (nb.width > 0 && bb.width > 0 && nb.width.isFinite) {
+        final candidate = bb.width / nb.width;
         if (candidate.isFinite && candidate > 0) return candidate;
       }
     }
@@ -178,70 +105,32 @@ class _SelfieShaderOverlayState extends State<SelfieShaderOverlay> {
   double? _estimateSourceHeight(List<YOLOResult> list) {
     for (final d in list) {
       final nb = d.normalizedBox;
-      final b = d.boundingBox;
-      final h = nb.height;
-      if (h > 0 && b.height > 0 && h.isFinite) {
-        final candidate = b.height / h;
+      final bb = d.boundingBox;
+      if (nb.height > 0 && bb.height > 0 && nb.height.isFinite) {
+        final candidate = bb.height / nb.height;
         if (candidate.isFinite && candidate > 0) return candidate;
       }
     }
     return null;
   }
 
-  Future<ui.Image> _maskFrom2D(List<List<double>> mask) async {
-    final h = mask.length;
-    final w = mask.first.length;
-    final bytes = Uint8List(w * h * 4);
-    var i = 0;
-    for (var y = 0; y < h; y++) {
-      final row = mask[y];
-      for (var x = 0; x < w; x++) {
-        final v = (row[x].clamp(0.0, 1.0) * 255).toInt();
-        bytes[i++] = v; // R
-        bytes[i++] = v; // G
-        bytes[i++] = v; // B
-        bytes[i++] = 255; // A
-      }
-    }
-
-    final buffer = await ImmutableBuffer.fromUint8List(bytes);
-    final desc = ImageDescriptor.raw(
-      buffer,
-      width: w,
-      height: h,
-      pixelFormat: PixelFormat.rgba8888,
-    );
-    final codec = await desc.instantiateCodec();
-    final frame = await codec.getNextFrame();
-    return frame.image;
-  }
-
   @override
   Widget build(BuildContext context) {
-    final program = _program;
-    final bg = _bgImage;
-    final stash = _mustacheImage;
-    final mask = _maskImage;
-    if (program == null || bg == null || stash == null || mask == null) {
+    if (widget.poseDetections.isEmpty && !widget.debugPose) {
       return const SizedBox.shrink();
     }
 
     return IgnorePointer(
       child: CustomPaint(
-        painter: _SelfieShaderPainter(
-          program: program,
-          background: bg,
-          mustache: stash,
-          mask: mask,
+        painter: _PoseOverlayPainter(
           detections: widget.detections,
           poseDetections: widget.poseDetections,
+          mustacheImage: _mustacheImage,
+          mustacheAlpha: widget.mustacheAlpha.clamp(0.0, 1.0).toDouble(),
           flipHorizontal: widget.flipHorizontal,
           flipVertical: widget.flipVertical,
-          mode: widget.mode,
-          mustacheAlpha: widget.mustacheAlpha,
-          mustacheScale: widget.mustacheScale,
-          srcW: _srcW,
-          srcH: _srcH,
+          sourceWidth: _srcW,
+          sourceHeight: _srcH,
           debugPose: widget.debugPose,
         ),
       ),
@@ -249,130 +138,190 @@ class _SelfieShaderOverlayState extends State<SelfieShaderOverlay> {
   }
 }
 
-class _SelfieShaderPainter extends CustomPainter {
-  _SelfieShaderPainter({
-    required this.program,
-    required this.background,
-    required this.mustache,
-    required this.mask,
+class _PoseOverlayPainter extends CustomPainter {
+  _PoseOverlayPainter({
     required this.detections,
     required this.poseDetections,
+    required this.mustacheImage,
+    required this.mustacheAlpha,
     required this.flipHorizontal,
     required this.flipVertical,
-    required this.mode,
-    required this.mustacheAlpha,
-    required this.mustacheScale,
-    required this.srcW,
-    required this.srcH,
+    required this.sourceWidth,
+    required this.sourceHeight,
     required this.debugPose,
   });
 
-  final ui.FragmentProgram program;
-  final ui.Image background;
-  final ui.Image mustache;
-  final ui.Image mask;
   final List<YOLOResult> detections;
   final List<YOLOResult> poseDetections;
+  final ui.Image? mustacheImage;
+  final double mustacheAlpha;
   final bool flipHorizontal;
   final bool flipVertical;
-  final double mode;
-  final double mustacheAlpha;
-  final double mustacheScale;
-  final double? srcW;
-  final double? srcH;
+  final double? sourceWidth;
+  final double? sourceHeight;
   final bool debugPose;
 
-  static const double _noseThreshold = 0.15;
-  static const double _eyeThreshold = 0.25;
-  static const double _candidateThreshold = 0.05;
+  static const double _minMustacheWidth = 24;
+  static const double _maxMustacheWidthFactor = 0.6;
+  static const double _fallbackWidthFactor = 0.36;
+  static const double _eyeWidthMultiplier = 1.08;
+  static const double _noseConfidence = 0.15;
+  static const double _eyeConfidence = 0.25;
+  static const double _candidateConfidence = 0.05;
 
   @override
   void paint(Canvas canvas, Size size) {
     if (size.isEmpty) return;
 
-    final face = _resolveFaceData(size);
-    final shader = program.fragmentShader();
+    final transform = _LetterboxTransform.fromView(
+      viewSize: size,
+      sourceWidth: sourceWidth,
+      sourceHeight: sourceHeight,
+    );
 
-    shader.setImageSampler(0, mask);
-    shader.setImageSampler(1, background);
-    shader.setImageSampler(2, mustache);
+    final poseDetection = _pickPrimaryPose(poseDetections, size);
+    final maskDetection = _pickPrimaryMask(detections);
 
-    int i = 0;
-    shader.setFloat(i++, size.width);
-    shader.setFloat(i++, size.height);
-    shader.setFloat(i++, mode);
-    shader.setFloat(i++, flipHorizontal ? 1.0 : 0.0);
-    shader.setFloat(i++, flipVertical ? 1.0 : 0.0);
+    Rect? faceRectImage;
+    Offset? noseImage;
+    Offset? leftEyeImage;
+    Offset? rightEyeImage;
+    Offset? noseBridgeStartImage;
+    Offset? noseBridgeEndImage;
+    Offset? upperLipImage;
 
-    shader.setFloat(i++, face.imageWidth);
-    shader.setFloat(i++, face.imageHeight);
-    shader.setFloat(i++, 0.0); // uRotation placeholder
-
-    if (face.hasFace) {
-      final rect = face.faceRect!;
-      shader.setFloat(i++, 1.0);
-      shader.setFloat(i++, rect.left);
-      shader.setFloat(i++, rect.top);
-      shader.setFloat(i++, rect.right);
-      shader.setFloat(i++, rect.bottom);
-    } else {
-      shader.setFloat(i++, 0.0);
-      shader.setFloat(i++, 0.0);
-      shader.setFloat(i++, 0.0);
-      shader.setFloat(i++, 0.0);
-      shader.setFloat(i++, 0.0);
+    if (poseDetection != null) {
+      final landmarks = _extractPoseLandmarks(
+        detection: poseDetection,
+        transform: transform,
+        seedRect: faceRectImage,
+      );
+      faceRectImage = landmarks.faceRect ?? faceRectImage;
+      noseImage = landmarks.nose;
+      leftEyeImage = landmarks.leftEye;
+      rightEyeImage = landmarks.rightEye;
+      noseBridgeStartImage = landmarks.noseBridgeStart;
+      noseBridgeEndImage = landmarks.noseBridgeEnd ?? noseImage;
+      upperLipImage = landmarks.upperLipCenter;
     }
 
-    if (face.noseBridgeStart != null && face.noseBridgeEnd != null) {
-      shader.setFloat(i++, 2.0);
-      shader.setFloat(i++, face.noseBridgeStart!.dx);
-      shader.setFloat(i++, face.noseBridgeStart!.dy);
-      shader.setFloat(i++, face.noseBridgeEnd!.dx);
-      shader.setFloat(i++, face.noseBridgeEnd!.dy);
-    } else {
-      shader.setFloat(i++, 0.0);
-      shader.setFloat(i++, 0.0);
-      shader.setFloat(i++, 0.0);
-      shader.setFloat(i++, 0.0);
-      shader.setFloat(i++, 0.0);
+    if (faceRectImage == null && maskDetection != null) {
+      faceRectImage = transform.viewRectToImage(maskDetection.boundingBox);
     }
 
-    if (face.upperLipCenter != null) {
-      shader.setFloat(i++, 1.0);
-      shader.setFloat(i++, face.upperLipCenter!.dx);
-      shader.setFloat(i++, face.upperLipCenter!.dy);
-    } else {
-      shader.setFloat(i++, 0.0);
-      shader.setFloat(i++, 0.0);
-      shader.setFloat(i++, 0.0);
+    final faceRectView = _mapRectToCanvas(faceRectImage, transform, size);
+    final noseView = _mapPointToCanvas(noseImage, transform, size);
+    final leftEyeView = _mapPointToCanvas(leftEyeImage, transform, size);
+    final rightEyeView = _mapPointToCanvas(rightEyeImage, transform, size);
+    final noseBridgeStartView = _mapPointToCanvas(
+      noseBridgeStartImage,
+      transform,
+      size,
+    );
+    final noseBridgeEndView = _mapPointToCanvas(
+      noseBridgeEndImage,
+      transform,
+      size,
+    );
+    final upperLipView = _mapPointToCanvas(upperLipImage, transform, size);
+
+    _drawMustache(
+      canvas,
+      size,
+      faceRectView: faceRectView,
+      leftEye: leftEyeView,
+      rightEye: rightEyeView,
+      nose: noseView,
+      noseBridgeEnd: noseBridgeEndView,
+    );
+
+    if (debugPose) {
+      _drawDebug(
+        canvas,
+        faceRect: faceRectView,
+        leftEye: leftEyeView,
+        rightEye: rightEyeView,
+        nose: noseView,
+        noseBridgeStart: noseBridgeStartView,
+        noseBridgeEnd: noseBridgeEndView,
+        upperLip: upperLipView,
+      );
     }
-
-    shader.setFloat(i++, mustacheScale);
-    shader.setFloat(i++, mustacheAlpha);
-
-    final paint = Paint()..shader = shader;
-    canvas.drawRect(Offset.zero & size, paint);
-
-    if (debugPose) _paintPoseDebug(canvas, size, face);
   }
 
-  void _paintPoseDebug(Canvas canvas, Size size, _FaceUniformData face) {
-    final transform = face.transform;
-    final faceRect = _mapRectToCanvas(face.faceRect, transform, size);
-    final leftEye = _mapPointToCanvas(face.leftEye, transform, size);
-    final rightEye = _mapPointToCanvas(face.rightEye, transform, size);
-    final nose = _mapPointToCanvas(face.nose, transform, size);
-    final noseBridgeStart = _mapPointToCanvas(
-      face.noseBridgeStart,
-      transform,
-      size,
+  void _drawMustache(
+    Canvas canvas,
+    Size size, {
+    Rect? faceRectView,
+    Offset? leftEye,
+    Offset? rightEye,
+    Offset? nose,
+    Offset? noseBridgeEnd,
+  }) {
+    final image = mustacheImage;
+    if (image == null) return;
+
+    final width = _resolveMustacheWidth(
+      faceRectView: faceRectView,
+      leftEye: leftEye,
+      rightEye: rightEye,
+      viewSize: size,
     );
-    final noseBridgeEnd = _mapPointToCanvas(
-      face.noseBridgeEnd,
-      transform,
-      size,
+    final height = width * (image.height / image.width);
+
+    double rotation = 0;
+    if (leftEye != null && rightEye != null) {
+      rotation = math.atan2(rightEye.dy - leftEye.dy, rightEye.dx - leftEye.dx);
+    }
+
+    final anchor =
+        nose ??
+        noseBridgeEnd ??
+        faceRectView?.center ??
+        Offset(size.width / 2, size.height / 2);
+    final offsetX = -math.sin(rotation) * (height / 2);
+    final offsetY = math.cos(rotation) * (height / 2);
+    final center = Offset(anchor.dx + offsetX, anchor.dy + offsetY);
+
+    canvas.save();
+    canvas.translate(center.dx, center.dy);
+    if (rotation != 0) {
+      canvas.rotate(rotation);
+    }
+
+    final rect = Rect.fromCenter(
+      center: Offset.zero,
+      width: width,
+      height: height,
     );
 
+    paintImage(
+      canvas: canvas,
+      rect: rect,
+      image: image,
+      fit: BoxFit.contain,
+      filterQuality: FilterQuality.high,
+      colorFilter: mustacheAlpha < 0.99
+          ? ColorFilter.mode(
+              Colors.white.withValues(alpha: mustacheAlpha),
+              BlendMode.modulate,
+            )
+          : null,
+    );
+
+    canvas.restore();
+  }
+
+  void _drawDebug(
+    Canvas canvas, {
+    Rect? faceRect,
+    Offset? leftEye,
+    Offset? rightEye,
+    Offset? nose,
+    Offset? noseBridgeStart,
+    Offset? noseBridgeEnd,
+    Offset? upperLip,
+  }) {
     final facePaint = Paint()
       ..color = Colors.limeAccent.withValues(alpha: 0.6)
       ..style = PaintingStyle.stroke
@@ -393,6 +342,9 @@ class _SelfieShaderPainter extends CustomPainter {
     final noseCross = Paint()
       ..color = Colors.deepOrangeAccent
       ..strokeWidth = 1.1;
+    final lipPaint = Paint()
+      ..color = Colors.purpleAccent.withValues(alpha: 0.7)
+      ..style = PaintingStyle.fill;
 
     if (faceRect != null) {
       canvas.drawRect(faceRect, facePaint);
@@ -427,129 +379,35 @@ class _SelfieShaderPainter extends CustomPainter {
     if (noseBridgeStart != null && noseBridgeEnd != null) {
       canvas.drawLine(noseBridgeStart, noseBridgeEnd, helperLine);
     }
+
+    if (upperLip != null) {
+      canvas.drawCircle(upperLip, 4, lipPaint);
+    }
   }
 
-  Offset? _mapPointToCanvas(
-    Offset? imagePoint,
-    _LetterboxTransform transform,
-    Size size,
-  ) {
-    if (imagePoint == null) return null;
-    final viewPoint = transform.imageToView(imagePoint);
-    var dx = viewPoint.dx;
-    var dy = viewPoint.dy;
-    if (flipHorizontal) dx = size.width - dx;
-    if (flipVertical) dy = size.height - dy;
-    if (!dx.isFinite || !dy.isFinite) return null;
-    return Offset(dx.clamp(0.0, size.width), dy.clamp(0.0, size.height));
-  }
-
-  Rect? _mapRectToCanvas(
-    Rect? imageRect,
-    _LetterboxTransform transform,
-    Size size,
-  ) {
-    if (imageRect == null || imageRect.isEmpty) return null;
-    final topLeft = _mapPointToCanvas(imageRect.topLeft, transform, size);
-    final bottomRight = _mapPointToCanvas(
-      imageRect.bottomRight,
-      transform,
-      size,
-    );
-    if (topLeft == null || bottomRight == null) return null;
-    final left = math.min(topLeft.dx, bottomRight.dx);
-    final right = math.max(topLeft.dx, bottomRight.dx);
-    final top = math.min(topLeft.dy, bottomRight.dy);
-    final bottom = math.max(topLeft.dy, bottomRight.dy);
-    if (right <= left || bottom <= top) return null;
-    return Rect.fromLTRB(left, top, right, bottom);
-  }
-
-  _FaceUniformData _resolveFaceData(Size canvasSize) {
-    final transform = _LetterboxTransform.fromView(
-      viewSize: canvasSize,
-      sourceWidth: srcW,
-      sourceHeight: srcH,
-    );
-    final imageWidth = transform.srcWidth;
-    final imageHeight = transform.srcHeight;
-
-    final poseDetection = _pickPrimaryPose(poseDetections, canvasSize);
-    final maskDetection = _pickPrimaryMask(detections);
-    final baseDetection = poseDetection ?? maskDetection;
-
-    Rect? faceRect;
-    if (baseDetection != null && !baseDetection.boundingBox.isEmpty) {
-      faceRect = _clampRectToImage(
-        transform.viewRectToImage(baseDetection.boundingBox),
-        transform,
-      );
+  double _resolveMustacheWidth({
+    required Rect? faceRectView,
+    required Offset? leftEye,
+    required Offset? rightEye,
+    required Size viewSize,
+  }) {
+    double width;
+    if (leftEye != null && rightEye != null) {
+      final eyeSpan = (leftEye - rightEye).distance;
+      width = eyeSpan * _eyeWidthMultiplier;
+    } else if (faceRectView != null) {
+      width = faceRectView.width * _fallbackWidthFactor;
+    } else {
+      width = viewSize.width * _fallbackWidthFactor;
     }
 
-    Offset? noseBridgeStart;
-    Offset? noseBridgeEnd;
-    Offset? upperLipCenter;
-    Offset? leftEye;
-    Offset? rightEye;
-    Offset? nose;
-
-    if (poseDetection != null) {
-      final landmarks = _extractPoseLandmarks(
-        detection: poseDetection,
-        canvasSize: canvasSize,
-        transform: transform,
-        seedRect: faceRect,
-      );
-      faceRect ??= landmarks.faceRect;
-      noseBridgeStart = landmarks.noseBridgeStart;
-      noseBridgeEnd = landmarks.noseBridgeEnd;
-      upperLipCenter = landmarks.upperLipCenter;
-      leftEye = landmarks.leftEye;
-      rightEye = landmarks.rightEye;
-      nose = landmarks.nose;
+    if (!width.isFinite || width <= 0) {
+      width = viewSize.width * 0.3;
     }
 
-    if (faceRect == null &&
-        maskDetection != null &&
-        !maskDetection.boundingBox.isEmpty) {
-      faceRect = _clampRectToImage(
-        transform.viewRectToImage(maskDetection.boundingBox),
-        transform,
-      );
-    }
-
-    if (faceRect == Rect.zero) {
-      faceRect = null;
-    }
-
-    if (noseBridgeEnd == null && faceRect != null) {
-      noseBridgeEnd = faceRect.center;
-    }
-    nose ??= noseBridgeEnd;
-    if (noseBridgeStart == null && noseBridgeEnd != null && faceRect != null) {
-      noseBridgeStart = Offset(
-        noseBridgeEnd.dx,
-        math.max(faceRect.top, noseBridgeEnd.dy - faceRect.height * 0.18),
-      );
-    }
-    if (upperLipCenter == null && noseBridgeEnd != null && faceRect != null) {
-      upperLipCenter = Offset(
-        noseBridgeEnd.dx,
-        math.min(faceRect.bottom, noseBridgeEnd.dy + faceRect.height * 0.12),
-      );
-    }
-
-    return _FaceUniformData(
-      imageWidth: imageWidth,
-      imageHeight: imageHeight,
-      transform: transform,
-      faceRect: faceRect,
-      noseBridgeStart: noseBridgeStart,
-      noseBridgeEnd: noseBridgeEnd,
-      upperLipCenter: upperLipCenter,
-      leftEye: leftEye,
-      rightEye: rightEye,
-      nose: nose,
+    return width.clamp(
+      _minMustacheWidth,
+      viewSize.width * _maxMustacheWidthFactor,
     );
   }
 
@@ -558,10 +416,9 @@ class _SelfieShaderPainter extends CustomPainter {
     var bestArea = -1.0;
     for (final d in list) {
       final mask = d.mask;
-      if (mask == null || mask.isEmpty) continue;
-      final b = d.boundingBox;
-      if (b.isEmpty) continue;
-      final area = (b.width * b.height).abs();
+      final box = d.boundingBox;
+      if (mask == null || mask.isEmpty || box.isEmpty) continue;
+      final area = (box.width * box.height).abs();
       if (area > bestArea) {
         bestArea = area;
         best = d;
@@ -594,6 +451,34 @@ class _SelfieShaderPainter extends CustomPainter {
     return best;
   }
 
+  Rect? _mapRectToCanvas(Rect? rect, _LetterboxTransform transform, Size size) {
+    if (rect == null || rect.isEmpty) return null;
+    final topLeft = _mapPointToCanvas(rect.topLeft, transform, size);
+    final bottomRight = _mapPointToCanvas(rect.bottomRight, transform, size);
+    if (topLeft == null || bottomRight == null) return null;
+    final left = math.min(topLeft.dx, bottomRight.dx);
+    final right = math.max(topLeft.dx, bottomRight.dx);
+    final top = math.min(topLeft.dy, bottomRight.dy);
+    final bottom = math.max(topLeft.dy, bottomRight.dy);
+    if (right <= left || bottom <= top) return null;
+    return Rect.fromLTRB(left, top, right, bottom);
+  }
+
+  Offset? _mapPointToCanvas(
+    Offset? imagePoint,
+    _LetterboxTransform transform,
+    Size size,
+  ) {
+    if (imagePoint == null) return null;
+    final viewPoint = transform.imageToView(imagePoint);
+    var dx = viewPoint.dx;
+    var dy = viewPoint.dy;
+    if (flipHorizontal) dx = size.width - dx;
+    if (flipVertical) dy = size.height - dy;
+    if (!dx.isFinite || !dy.isFinite) return null;
+    return Offset(dx.clamp(0.0, size.width), dy.clamp(0.0, size.height));
+  }
+
   Rect _clampRectToImage(Rect rect, _LetterboxTransform transform) {
     final left = rect.left.clamp(0.0, transform.srcWidth);
     final top = rect.top.clamp(0.0, transform.srcHeight);
@@ -607,7 +492,6 @@ class _SelfieShaderPainter extends CustomPainter {
 
   _PoseLandmarks _extractPoseLandmarks({
     required YOLOResult detection,
-    required Size canvasSize,
     required _LetterboxTransform transform,
     Rect? seedRect,
   }) {
@@ -629,7 +513,6 @@ class _SelfieShaderPainter extends CustomPainter {
       (index) => _mapPosePoint(
         detection: detection,
         index: index,
-        canvasSize: canvasSize,
         transform: transform,
       ),
       growable: false,
@@ -637,7 +520,7 @@ class _SelfieShaderPainter extends CustomPainter {
 
     Offset? noseBridgeEnd;
     Offset? nose;
-    final nosePoint = _pointWithThreshold(points, 0, _noseThreshold);
+    final nosePoint = _pointWithThreshold(points, 0, _noseConfidence);
     if (nosePoint != null) {
       noseBridgeEnd = nosePoint.imagePosition;
       nose = nosePoint.imagePosition;
@@ -646,8 +529,8 @@ class _SelfieShaderPainter extends CustomPainter {
     Offset? noseBridgeStart;
     Offset? leftEyePosition;
     Offset? rightEyePosition;
-    final leftEyePoint = _pointWithThreshold(points, 1, _eyeThreshold);
-    final rightEyePoint = _pointWithThreshold(points, 2, _eyeThreshold);
+    final leftEyePoint = _pointWithThreshold(points, 1, _eyeConfidence);
+    final rightEyePoint = _pointWithThreshold(points, 2, _eyeConfidence);
     if (leftEyePoint != null) {
       leftEyePosition = leftEyePoint.imagePosition;
     }
@@ -667,7 +550,7 @@ class _SelfieShaderPainter extends CustomPainter {
       final horizontalLimit = faceRect.width * 0.45;
       final candidates = <_PosePoint>[];
       for (final pt in points) {
-        if (pt == null || pt.confidence < _candidateThreshold) continue;
+        if (pt == null || pt.confidence < _candidateConfidence) continue;
         final pos = pt.imagePosition;
         if (pos.dy <= noseBridgeEnd.dy) continue;
         if (pos.dy > noseBridgeEnd.dy + verticalLimit) continue;
@@ -713,7 +596,6 @@ class _SelfieShaderPainter extends CustomPainter {
   _PosePoint? _mapPosePoint({
     required YOLOResult detection,
     required int index,
-    required Size canvasSize,
     required _LetterboxTransform transform,
   }) {
     final keypoints = detection.keypoints;
@@ -729,41 +611,39 @@ class _SelfieShaderPainter extends CustomPainter {
     final mapped = _convertPosePoint(
       detection: detection,
       point: keypoints[index],
+      transform: transform,
     );
     if (mapped == null) return null;
 
-    final viewClamped = Offset(
-      mapped.dx.clamp(0.0, canvasSize.width),
-      mapped.dy.clamp(0.0, canvasSize.height),
-    );
-    final imagePoint = transform.viewToImage(mapped);
     final imageClamped = Offset(
-      imagePoint.dx.clamp(0.0, transform.srcWidth),
-      imagePoint.dy.clamp(0.0, transform.srcHeight),
+      mapped.dx.clamp(0.0, transform.srcWidth),
+      mapped.dy.clamp(0.0, transform.srcHeight),
     );
-    return _PosePoint(
-      viewPosition: viewClamped,
-      imagePosition: imageClamped,
-      confidence: confidence,
-    );
+    return _PosePoint(imagePosition: imageClamped, confidence: confidence);
   }
 
   Offset? _convertPosePoint({
     required YOLOResult detection,
     required Point point,
+    required _LetterboxTransform transform,
   }) {
     final looksNormalized =
         point.x >= 0.0 && point.x <= 1.0 && point.y >= 0.0 && point.y <= 1.0;
     if (looksNormalized && !detection.boundingBox.isEmpty) {
-      final bbox = detection.boundingBox;
+      final bboxImage = transform.viewRectToImage(detection.boundingBox);
       return Offset(
-        bbox.left + point.x * bbox.width,
-        bbox.top + point.y * bbox.height,
+        bboxImage.left + point.x * bboxImage.width,
+        bboxImage.top + point.y * bboxImage.height,
       );
     }
 
     if (point.x.isFinite && point.y.isFinite) {
-      return Offset(point.x.toDouble(), point.y.toDouble());
+      final viewPoint = Offset(point.x.toDouble(), point.y.toDouble());
+      final imagePoint = transform.viewToImage(viewPoint);
+      return Offset(
+        imagePoint.dx.clamp(0.0, transform.srcWidth),
+        imagePoint.dy.clamp(0.0, transform.srcHeight),
+      );
     }
     return null;
   }
@@ -777,9 +657,6 @@ class _SelfieShaderPainter extends CustomPainter {
     final pt = list[index];
     if (pt == null) return null;
     if (pt.confidence < threshold) return null;
-    if (!pt.viewPosition.dx.isFinite || !pt.viewPosition.dy.isFinite) {
-      return null;
-    }
     if (!pt.imagePosition.dx.isFinite || !pt.imagePosition.dy.isFinite) {
       return null;
     }
@@ -787,19 +664,15 @@ class _SelfieShaderPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _SelfieShaderPainter oldDelegate) {
-    return oldDelegate.background != background ||
-        oldDelegate.mustache != mustache ||
-        oldDelegate.mask != mask ||
+  bool shouldRepaint(covariant _PoseOverlayPainter oldDelegate) {
+    return oldDelegate.mustacheImage != mustacheImage ||
+        oldDelegate.mustacheAlpha != mustacheAlpha ||
         oldDelegate.detections != detections ||
         oldDelegate.poseDetections != poseDetections ||
         oldDelegate.flipHorizontal != flipHorizontal ||
         oldDelegate.flipVertical != flipVertical ||
-        oldDelegate.mode != mode ||
-        oldDelegate.mustacheAlpha != mustacheAlpha ||
-        oldDelegate.mustacheScale != mustacheScale ||
-        oldDelegate.srcW != srcW ||
-        oldDelegate.srcH != srcH ||
+        oldDelegate.sourceWidth != sourceWidth ||
+        oldDelegate.sourceHeight != sourceHeight ||
         oldDelegate.debugPose != debugPose;
   }
 }
@@ -819,23 +692,12 @@ class _LetterboxTransform {
   final double dx;
   final double dy;
 
-  Size get srcSize => Size(srcWidth, srcHeight);
-
   Offset imageToView(Offset imagePoint) {
     return Offset(dx + imagePoint.dx * scale, dy + imagePoint.dy * scale);
   }
 
   Offset viewToImage(Offset viewPoint) {
     return Offset((viewPoint.dx - dx) / scale, (viewPoint.dy - dy) / scale);
-  }
-
-  Rect imageRectToView(Rect rect) {
-    return Rect.fromLTRB(
-      dx + rect.left * scale,
-      dy + rect.top * scale,
-      dx + rect.right * scale,
-      dy + rect.bottom * scale,
-    );
   }
 
   Rect viewRectToImage(Rect rect) {
@@ -852,8 +714,12 @@ class _LetterboxTransform {
     required double? sourceWidth,
     required double? sourceHeight,
   }) {
-    final srcW = (sourceWidth ?? viewSize.width).clamp(1.0, double.infinity);
-    final srcH = (sourceHeight ?? viewSize.height).clamp(1.0, double.infinity);
+    final srcW = (sourceWidth ?? viewSize.width)
+        .clamp(1.0, double.infinity)
+        .toDouble();
+    final srcH = (sourceHeight ?? viewSize.height)
+        .clamp(1.0, double.infinity)
+        .toDouble();
     final scale = math.max(viewSize.width / srcW, viewSize.height / srcH);
     final scaledW = srcW * scale;
     final scaledH = srcH * scale;
@@ -867,34 +733,6 @@ class _LetterboxTransform {
       dy: dy,
     );
   }
-}
-
-class _FaceUniformData {
-  const _FaceUniformData({
-    required this.imageWidth,
-    required this.imageHeight,
-    required this.transform,
-    required this.faceRect,
-    required this.noseBridgeStart,
-    required this.noseBridgeEnd,
-    required this.upperLipCenter,
-    this.leftEye,
-    this.rightEye,
-    this.nose,
-  });
-
-  final double imageWidth;
-  final double imageHeight;
-  final _LetterboxTransform transform;
-  final Rect? faceRect;
-  final Offset? noseBridgeStart;
-  final Offset? noseBridgeEnd;
-  final Offset? upperLipCenter;
-  final Offset? leftEye;
-  final Offset? rightEye;
-  final Offset? nose;
-
-  bool get hasFace => faceRect != null && !faceRect!.isEmpty;
 }
 
 class _PoseLandmarks {
@@ -918,13 +756,8 @@ class _PoseLandmarks {
 }
 
 class _PosePoint {
-  const _PosePoint({
-    required this.viewPosition,
-    required this.imagePosition,
-    required this.confidence,
-  });
+  const _PosePoint({required this.imagePosition, required this.confidence});
 
-  final Offset viewPosition;
   final Offset imagePosition;
   final double confidence;
 }

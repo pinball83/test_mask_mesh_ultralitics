@@ -3,6 +3,7 @@ import 'package:ultralytics_yolo/yolo_view.dart';
 
 import '../controller/segmentation_controller.dart';
 import 'selfie_shader_overlay.dart';
+import 'segmentation_overlay.dart';
 
 class SegmentationCameraView extends StatelessWidget {
   const SegmentationCameraView({super.key, required this.controller});
@@ -49,17 +50,23 @@ class SegmentationCameraView extends StatelessWidget {
         ),
         if (controller.showMasks)
           Positioned.fill(
-            child: SelfieShaderOverlay(
+            child: SegmentationOverlay(
               detections: controller.detections,
-              poseDetections: controller.poseDetections,
+              maskThreshold: controller.maskThreshold,
               flipHorizontal: controller.flipMaskHorizontal,
               flipVertical: controller.flipMaskVertical,
-              mode: 1.0, // keep mask-cut mode
-              mustacheAlpha: 1.0,
-              mustacheScale: 0.12,
-              debugPose: true,
             ),
           ),
+        Positioned.fill(
+          child: SelfieShaderOverlay(
+            detections: controller.detections,
+            poseDetections: controller.poseDetections,
+            flipHorizontal: controller.flipMaskHorizontal,
+            flipVertical: controller.flipMaskVertical,
+            mustacheAlpha: 1.0,
+            debugPose: true,
+          ),
+        ),
         Positioned(
           top: 16,
           left: 16,
