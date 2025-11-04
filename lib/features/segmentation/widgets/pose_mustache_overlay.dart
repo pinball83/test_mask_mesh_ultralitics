@@ -203,39 +203,37 @@ class _PoseMustachePainter extends CustomPainter {
       leftEye: leftEye,
       rightEye: rightEye,
     );
-      final height =
-          width *
-          (mustacheImage.height.toDouble() / mustacheImage.width.toDouble());
+    final height =
+        width *
+        (mustacheImage.height.toDouble() / mustacheImage.width.toDouble());
 
-      // Determine head rotation from anchors and place the mustache so that
-      // its top edge touches the nose (data-driven; no magic factors).
-    final rotation = _resolveRotation(
-      leftEar ?? leftEye,
-      rightEar ?? rightEye,
-    );
+    // Determine head rotation from anchors and place the mustache so that
+    // its top edge touches the nose (data-driven; no magic factors).
+    final rotation = _resolveRotation(leftEar ?? leftEye, rightEar ?? rightEye);
     // Anchor: prefer mapped nose; otherwise fall back to face box center.
-    final anchor = nose ?? Offset(bb.left + bb.width / 2, bb.top + bb.height * 0.62);
+    final anchor =
+        nose ?? Offset(bb.left + bb.width / 2, bb.top + bb.height * 0.62);
     final offsetX = -sin(rotation) * (height / 2);
-    final offsetY =  cos(rotation) * (height / 2);
+    final offsetY = cos(rotation) * (height / 2);
     final center = Offset(anchor.dx + offsetX, anchor.dy + offsetY);
 
     canvas.save();
     canvas.translate(center.dx, center.dy);
     if (rotation != 0) canvas.rotate(rotation);
 
-      final rect = Rect.fromCenter(
-        center: Offset.zero,
-        width: width,
-        height: height,
-      );
+    final rect = Rect.fromCenter(
+      center: Offset.zero,
+      width: width,
+      height: height,
+    );
 
-      paintImage(
-        canvas: canvas,
-        rect: rect,
-        image: mustacheImage,
-        fit: BoxFit.contain,
-        filterQuality: FilterQuality.high,
-      );
+    paintImage(
+      canvas: canvas,
+      rect: rect,
+      image: mustacheImage,
+      fit: BoxFit.contain,
+      filterQuality: FilterQuality.high,
+    );
 
     // Draw a visible bounding box around the mustache image
     final bbPaint = Paint()
@@ -277,18 +275,33 @@ class _PoseMustachePainter extends CustomPainter {
         );
         if (n != null) {
           canvas.drawCircle(n, 5, nosePaint);
-          canvas.drawLine(Offset(n.dx - 8, n.dy), Offset(n.dx + 8, n.dy), crossPaint);
-          canvas.drawLine(Offset(n.dx, n.dy - 8), Offset(n.dx, n.dy + 8), crossPaint);
+          canvas.drawLine(
+            Offset(n.dx - 8, n.dy),
+            Offset(n.dx + 8, n.dy),
+            crossPaint,
+          );
+          canvas.drawLine(
+            Offset(n.dx, n.dy - 8),
+            Offset(n.dx, n.dy + 8),
+            crossPaint,
+          );
         }
         // Draw raw model-reported nose (no mapping) in blue to inspect source coords
         final raw = kps[_noseIndex];
-        canvas.drawCircle(Offset(raw.x.toDouble(), raw.y.toDouble()), 3, rawPaint);
+        canvas.drawCircle(
+          Offset(raw.x.toDouble(), raw.y.toDouble()),
+          3,
+          rawPaint,
+        );
         // Also print numbers in the corner for quick read
         final tp = TextPainter(
           text: TextSpan(
             text:
-                'raw nose: (${raw.x.toStringAsFixed(1)}, ${raw.y.toStringAsFixed(1)})\n' +
-                'bb: L${d.boundingBox.left.toStringAsFixed(1)} T${d.boundingBox.top.toStringAsFixed(1)} W${d.boundingBox.width.toStringAsFixed(1)} H${d.boundingBox.height.toStringAsFixed(1)}',
+                'raw nose: (${raw.x.toStringAsFixed(1)}, ${raw.y.toStringAsFixed(1)})\n'
+                'bb: L${d.boundingBox.left.toStringAsFixed(1)} '
+                'T${d.boundingBox.top.toStringAsFixed(1)} '
+                'W${d.boundingBox.width.toStringAsFixed(1)} '
+                'H${d.boundingBox.height.toStringAsFixed(1)}',
             style: const TextStyle(color: Colors.white, fontSize: 11),
           ),
           textDirection: TextDirection.ltr,
@@ -375,10 +388,7 @@ class _PoseMustachePainter extends CustomPainter {
     Offset mapped;
     final looksNormalized = p.x >= 0 && p.x <= 1 && p.y >= 0 && p.y <= 1;
     if (looksNormalized && !bb.isEmpty) {
-      mapped = Offset(
-        bb.left + p.x * bb.width,
-        bb.top + p.y * bb.height,
-      );
+      mapped = Offset(bb.left + p.x * bb.width, bb.top + p.y * bb.height);
     } else {
       // Raw keypoints are already in view coordinates; use as-is.
       mapped = Offset(p.x.toDouble(), p.y.toDouble());

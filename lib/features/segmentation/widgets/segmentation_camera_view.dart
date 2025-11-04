@@ -57,6 +57,7 @@ class SegmentationCameraView extends StatelessWidget {
               mode: 1.0, // keep mask-cut mode
               mustacheAlpha: 1.0,
               mustacheScale: 0.12,
+              debugPose: true,
             ),
           ),
         Positioned(
