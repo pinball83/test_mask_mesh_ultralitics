@@ -17,7 +17,7 @@ class SegmentationOverlay extends StatefulWidget {
   final double maskThreshold;
   final bool flipHorizontal;
   final bool flipVertical;
-  final String backgroundAsset;
+  final String? backgroundAsset;
 
   @override
   State<SegmentationOverlay> createState() => _SegmentationOverlayState();
@@ -50,7 +50,12 @@ class _SegmentationOverlayState extends State<SegmentationOverlay> {
 
   void _resolveBackgroundImage() {
     _disposeImageStream();
-    final imageProvider = AssetImage(widget.backgroundAsset);
+    final asset = widget.backgroundAsset;
+    if (asset == null) {
+      setState(() => _backgroundImage = null);
+      return;
+    }
+    final imageProvider = AssetImage(asset);
     final stream = imageProvider.resolve(ImageConfiguration.empty);
     _imageStream = stream;
     _imageStreamListener = ImageStreamListener((imageInfo, _) {

@@ -48,25 +48,7 @@ class SegmentationCameraView extends StatelessWidget {
             onZoomChanged: controller.onZoomChanged,
           ),
         ),
-        if (controller.showMasks)
-          Positioned.fill(
-            child: SegmentationOverlay(
-              detections: controller.detections,
-              maskThreshold: controller.maskThreshold,
-              flipHorizontal: controller.flipMaskHorizontal,
-              flipVertical: controller.flipMaskVertical,
-            ),
-          ),
-        Positioned.fill(
-          child: SelfieShaderOverlay(
-            detections: controller.detections,
-            poseDetections: controller.poseDetections,
-            flipHorizontal: controller.flipMaskHorizontal,
-            flipVertical: controller.flipMaskVertical,
-            mustacheAlpha: 1.0,
-            debugPose: true,
-          ),
-        ),
+        ..._buildOverlays(controller),
         Positioned(
           top: 16,
           left: 16,
@@ -78,6 +60,64 @@ class SegmentationCameraView extends StatelessWidget {
       ],
     );
   }
+}
+
+List<Widget> _buildOverlays(SegmentationController controller) {
+  final overlays = <Widget>[];
+  switch (controller.overlayMode) {
+    case SegmentationOverlayMode.backgroundReplacement:
+      overlays.add(
+        Positioned.fill(
+          child: SegmentationOverlay(
+            detections: controller.detections,
+            maskThreshold: controller.maskThreshold,
+            flipHorizontal: controller.flipMaskHorizontal,
+            flipVertical: controller.flipMaskVertical,
+            backgroundAsset: 'assets/images/bg_image.jpg',
+          ),
+        ),
+      );
+      break;
+    case SegmentationOverlayMode.maskOnly:
+      overlays.add(
+        Positioned.fill(
+          child: SegmentationOverlay(
+            detections: controller.detections,
+            maskThreshold: controller.maskThreshold,
+            flipHorizontal: controller.flipMaskHorizontal,
+            flipVertical: controller.flipMaskVertical,
+            backgroundAsset: null,
+          ),
+        ),
+      );
+      break;
+    case SegmentationOverlayMode.combined:
+      overlays.add(
+        Positioned.fill(
+          child: SegmentationOverlay(
+            detections: controller.detections,
+            maskThreshold: controller.maskThreshold,
+            flipHorizontal: controller.flipMaskHorizontal,
+            flipVertical: controller.flipMaskVertical,
+            backgroundAsset: 'assets/images/bg_image.jpg',
+          ),
+        ),
+      );
+      overlays.add(
+        Positioned.fill(
+          child: SelfieShaderOverlay(
+            detections: controller.detections,
+            poseDetections: controller.poseDetections,
+            flipHorizontal: controller.flipMaskHorizontal,
+            flipVertical: controller.flipMaskVertical,
+            mustacheAlpha: 1.0,
+            debugPose: true,
+          ),
+        ),
+      );
+      break;
+  }
+  return overlays;
 }
 
 class _LoadingState extends StatelessWidget {

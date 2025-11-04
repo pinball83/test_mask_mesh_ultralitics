@@ -11,6 +11,8 @@ import 'package:ultralytics_yolo/yolo_streaming_config.dart';
 
 import '../services/model_loader.dart';
 
+enum SegmentationOverlayMode { backgroundReplacement, maskOnly, combined }
+
 class SegmentationController extends ChangeNotifier {
   SegmentationController({ModelLoader? modelLoader})
     : _modelLoader = modelLoader ?? ModelLoader();
@@ -20,7 +22,7 @@ class SegmentationController extends ChangeNotifier {
 
   bool _isLoading = true;
   bool _isUnsupportedPlatform = false;
-  bool _showMasks = true;
+  SegmentationOverlayMode _overlayMode = SegmentationOverlayMode.combined;
   double _confidenceThreshold = 0.45;
   double _maskThreshold = 0.4;
   double _currentZoomLevel = 1.0;
@@ -56,7 +58,7 @@ class SegmentationController extends ChangeNotifier {
 
   bool get isLoading => _isLoading;
   bool get isUnsupportedPlatform => _isUnsupportedPlatform;
-  bool get showMasks => _showMasks;
+  SegmentationOverlayMode get overlayMode => _overlayMode;
   double get confidenceThreshold => _confidenceThreshold;
   double get maskThreshold => _maskThreshold;
   double get currentZoomLevel => _currentZoomLevel;
@@ -211,8 +213,9 @@ class SegmentationController extends ChangeNotifier {
     await initialize();
   }
 
-  void toggleMasks() {
-    _showMasks = !_showMasks;
+  void setOverlayMode(SegmentationOverlayMode mode) {
+    if (_overlayMode == mode) return;
+    _overlayMode = mode;
     notifyListeners();
   }
 

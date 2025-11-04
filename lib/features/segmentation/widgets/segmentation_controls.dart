@@ -29,17 +29,34 @@ class SegmentationControls extends StatelessWidget {
         children: [
           Row(
             children: [
+              Text('Overlay mode', style: theme.textTheme.labelLarge),
+              const SizedBox(width: 12),
               Expanded(
-                child: SwitchListTile.adaptive(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Show segmentation mask'),
-                  value: controller.showMasks,
-                  onChanged: (_) => controller.toggleMasks(),
+                child: DropdownButton<SegmentationOverlayMode>(
+                  value: controller.overlayMode,
+                  isExpanded: true,
+                  onChanged: (mode) {
+                    if (mode != null) controller.setOverlayMode(mode);
+                  },
+                  items: const [
+                    DropdownMenuItem(
+                      value: SegmentationOverlayMode.backgroundReplacement,
+                      child: Text('Background replacement'),
+                    ),
+                    DropdownMenuItem(
+                      value: SegmentationOverlayMode.maskOnly,
+                      child: Text('Mask only'),
+                    ),
+                    DropdownMenuItem(
+                      value: SegmentationOverlayMode.combined,
+                      child: Text('Combined'),
+                    ),
+                  ],
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 16),
           Text(
             'Mask threshold (${controller.maskThreshold.toStringAsFixed(2)})',
             style: theme.textTheme.labelLarge,
