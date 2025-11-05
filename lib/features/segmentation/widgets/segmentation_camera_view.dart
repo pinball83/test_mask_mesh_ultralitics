@@ -119,7 +119,7 @@ List<Widget> _buildOverlays(SegmentationController controller) {
             flipHorizontal: controller.flipMaskHorizontal,
             flipVertical: controller.flipMaskVertical,
             mustacheAlpha: 1.0,
-            debugPose: true,
+            debugPose: false,
             showMustache: true,
           ),
         ),

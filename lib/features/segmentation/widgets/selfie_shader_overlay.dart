@@ -13,7 +13,7 @@ class SelfieShaderOverlay extends StatefulWidget {
     required this.poseDetections,
     required this.flipHorizontal,
     required this.flipVertical,
-    this.mustacheAsset = 'assets/images/mustash.png',
+    this.mustacheAsset = 'assets/images/must.png',
     this.mustacheAlpha = 1.0,
     this.debugPose = false,
     this.showMustache = true,
@@ -178,9 +178,9 @@ class _PoseOverlayPainter extends CustomPainter {
   final bool showMustache;
 
   static const double _minMustacheWidth = 24;
-  static const double _maxMustacheWidthFactor = 0.6;
-  static const double _fallbackWidthFactor = 0.36;
-  static const double _eyeWidthMultiplier = 1.08;
+  static const double _maxMustacheWidthFactor = 0.8;
+  static const double _fallbackWidthFactor = 0.5;
+  static const double _eyeWidthMultiplier = 1.8;
   static const double _noseConfidence = 0.15;
   static const double _eyeConfidence = 0.25;
   static const double _candidateConfidence = 0.05;
@@ -211,6 +211,7 @@ class _PoseOverlayPainter extends CustomPainter {
         detection: poseDetection,
         transform: transform,
         seedRect: faceRectImage,
+        actualViewSize: size,
       );
       faceRectImage = landmarks.faceRect ?? faceRectImage;
       noseImage = landmarks.nose;
@@ -257,6 +258,7 @@ class _PoseOverlayPainter extends CustomPainter {
     _drawMustache(
       canvas,
       size,
+      transform: transform,
       faceRectView: faceRectView,
       leftEye: leftEyeView,
       rightEye: rightEyeView,
@@ -281,6 +283,7 @@ class _PoseOverlayPainter extends CustomPainter {
   void _drawMustache(
     Canvas canvas,
     Size size, {
+    required _LetterboxTransform transform,
     Rect? faceRectView,
     Offset? leftEye,
     Offset? rightEye,
@@ -309,9 +312,9 @@ class _PoseOverlayPainter extends CustomPainter {
         noseBridgeEnd ??
         faceRectView?.center ??
         Offset(size.width / 2, size.height / 2);
-    final offsetX = -math.sin(rotation) * (height / 2);
-    final offsetY = math.cos(rotation) * (height / 2);
-    final center = Offset(anchor.dx + offsetX, anchor.dy + offsetY);
+    // Apply minimal correction in view space to center mask on nose
+    final correction = Offset(10 * transform.scale, 10 * transform.scale);
+    final center = Offset(anchor.dx - correction.dx, anchor.dy - correction.dy);
 
     canvas.save();
     canvas.translate(center.dx, center.dy);
@@ -633,6 +636,7 @@ class _PoseOverlayPainter extends CustomPainter {
     required YOLOResult detection,
     required _LetterboxTransform transform,
     Rect? seedRect,
+    required Size actualViewSize,
   }) {
     Rect? faceRect = seedRect;
     if (faceRect == null && !detection.boundingBox.isEmpty) {
@@ -653,11 +657,12 @@ class _PoseOverlayPainter extends CustomPainter {
         detection: detection,
         index: index,
         transform: transform,
+        viewSize: actualViewSize,
       ),
       growable: false,
     );
 
-    var delta = Offset(40, 30);
+    var delta = Offset(90, 100);
     Offset? noseBridgeEnd;
     Offset? nose;
     final nosePoint = _pointWithThreshold(points, 0, _noseConfidence);
@@ -737,6 +742,7 @@ class _PoseOverlayPainter extends CustomPainter {
     required YOLOResult detection,
     required int index,
     required _LetterboxTransform transform,
+    required Size viewSize,
   }) {
     final keypoints = detection.keypoints;
     final confidences = detection.keypointConfidences;
@@ -752,6 +758,7 @@ class _PoseOverlayPainter extends CustomPainter {
       detection: detection,
       point: keypoints[index],
       transform: transform,
+      viewSize: viewSize,
     );
     if (mapped == null) return null;
 
@@ -766,9 +773,14 @@ class _PoseOverlayPainter extends CustomPainter {
     required YOLOResult detection,
     required Point point,
     required _LetterboxTransform transform,
+    required Size viewSize,
   }) {
+    if (!point.x.isFinite || !point.y.isFinite) return null;
+
     final looksNormalized =
         point.x >= 0.0 && point.x <= 1.0 && point.y >= 0.0 && point.y <= 1.0;
+
+    // If normalized (0-1), treat as relative to bounding box
     if (looksNormalized && !detection.boundingBox.isEmpty) {
       final bboxImage = transform.viewRectToImage(detection.boundingBox);
       return Offset(
@@ -777,7 +789,13 @@ class _PoseOverlayPainter extends CustomPainter {
       );
     }
 
-    if (point.x.isFinite && point.y.isFinite) {
+    // Check if coordinates are in view space range first
+    // (YOLO pose keypoints are typically in view space, not image space)
+    if (point.x >= 0 &&
+        point.x <= viewSize.width &&
+        point.y >= 0 &&
+        point.y <= viewSize.height) {
+      // Keypoints are in view space - convert to image space
       final viewPoint = Offset(point.x.toDouble(), point.y.toDouble());
       final imagePoint = transform.viewToImage(viewPoint);
       return Offset(
@@ -785,7 +803,28 @@ class _PoseOverlayPainter extends CustomPainter {
         imagePoint.dy.clamp(0.0, transform.srcHeight),
       );
     }
-    return null;
+
+    // Fallback: if coordinates are very large, might be in image space
+    final maxExpectedCoord =
+        math.max(transform.srcWidth, transform.srcHeight) * 2;
+    if (point.x >= 0 &&
+        point.x <= maxExpectedCoord &&
+        point.y >= 0 &&
+        point.y <= maxExpectedCoord) {
+      // Likely already in image space - clamp to actual image bounds
+      return Offset(
+        point.x.clamp(0.0, transform.srcWidth),
+        point.y.clamp(0.0, transform.srcHeight),
+      );
+    }
+
+    // Last resort: treat as view space and convert
+    final viewPoint = Offset(point.x.toDouble(), point.y.toDouble());
+    final imagePoint = transform.viewToImage(viewPoint);
+    return Offset(
+      imagePoint.dx.clamp(0.0, transform.srcWidth),
+      imagePoint.dy.clamp(0.0, transform.srcHeight),
+    );
   }
 
   _PosePoint? _pointWithThreshold(
