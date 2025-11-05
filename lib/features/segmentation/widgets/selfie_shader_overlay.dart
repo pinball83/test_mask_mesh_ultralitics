@@ -93,7 +93,14 @@ class _SelfieShaderOverlayState extends State<SelfieShaderOverlay> {
   }
 
   double? _estimateSourceWidth(List<YOLOResult> list) {
-    for (final d in list) {
+    // Prefer segmentation detections (with non-empty mask) for estimating
+    // original source size, since their boxes are the reference used by
+    // the background overlay.
+    final ordered = [
+      ...list.where((d) => (d.mask?.isNotEmpty ?? false)),
+      ...list.where((d) => !(d.mask?.isNotEmpty ?? false)),
+    ];
+    for (final d in ordered) {
       final nb = d.normalizedBox;
       final bb = d.boundingBox;
       if (nb.width > 0 && bb.width > 0 && nb.width.isFinite) {
@@ -105,7 +112,11 @@ class _SelfieShaderOverlayState extends State<SelfieShaderOverlay> {
   }
 
   double? _estimateSourceHeight(List<YOLOResult> list) {
-    for (final d in list) {
+    final ordered = [
+      ...list.where((d) => (d.mask?.isNotEmpty ?? false)),
+      ...list.where((d) => !(d.mask?.isNotEmpty ?? false)),
+    ];
+    for (final d in ordered) {
       final nb = d.normalizedBox;
       final bb = d.boundingBox;
       if (nb.height > 0 && bb.height > 0 && nb.height.isFinite) {
@@ -229,6 +240,19 @@ class _PoseOverlayPainter extends CustomPainter {
       size,
     );
     final upperLipView = _mapPointToCanvas(upperLipImage, transform, size);
+
+    if (debugPose) {
+      _logDebugPoseMapping(
+        size: size,
+        transform: transform,
+        pose: poseDetection,
+        mask: maskDetection,
+        faceRectView: faceRectView,
+        noseView: noseView,
+        leftEyeView: leftEyeView,
+        rightEyeView: rightEyeView,
+      );
+    }
 
     _drawMustache(
       canvas,
@@ -457,6 +481,109 @@ class _PoseOverlayPainter extends CustomPainter {
     return best;
   }
 
+  // Throttled console logger to help debug mapping assumptions.
+  static DateTime? _lastLog;
+  void _logDebugPoseMapping({
+    required Size size,
+    required _LetterboxTransform transform,
+    required YOLOResult? pose,
+    required YOLOResult? mask,
+    required Rect? faceRectView,
+    required Offset? noseView,
+    required Offset? leftEyeView,
+    required Offset? rightEyeView,
+  }) {
+    final now = DateTime.now();
+    if (_lastLog != null && now.difference(_lastLog!).inMilliseconds < 500) {
+      return; // throttle ~2 logs/sec
+    }
+    _lastLog = now;
+
+    final bb = pose?.boundingBox;
+    final nb = pose?.normalizedBox;
+    final kp = pose?.keypoints;
+    final kc = pose?.keypointConfidences;
+    final noseRaw = (kp != null && kp.length > 0) ? kp[0] : null;
+    final leftEyeRaw = (kp != null && kp.length > 1) ? kp[1] : null;
+    final rightEyeRaw = (kp != null && kp.length > 2) ? kp[2] : null;
+    final noseConf = (kc != null && kc.isNotEmpty) ? kc[0] : null;
+
+    // Alternative mappings for the nose when it appears normalized.
+    Offset? altGlobalNormView;
+    Offset? altBoxNormView;
+    if (noseRaw != null) {
+      final looksNormalized =
+          noseRaw.x >= 0.0 && noseRaw.x <= 1.0 &&
+          noseRaw.y >= 0.0 && noseRaw.y <= 1.0;
+      if (looksNormalized) {
+        // Treat as global normalized (0..1 across source image)
+        final imagePoint = Offset(
+          noseRaw.x * transform.srcWidth,
+          noseRaw.y * transform.srcHeight,
+        );
+        altGlobalNormView = transform.imageToView(imagePoint);
+
+        // Treat as box-normalized (0..1 across bbox)
+        if (bb != null && !bb.isEmpty) {
+          final bboxImage = transform.viewRectToImage(bb);
+          final noseImage = Offset(
+            bboxImage.left + noseRaw.x * bboxImage.width,
+            bboxImage.top + noseRaw.y * bboxImage.height,
+          );
+          altBoxNormView = transform.imageToView(noseImage);
+        }
+      }
+    }
+
+    final segBB = mask?.boundingBox;
+    final segNB = mask?.normalizedBox;
+
+    debugPrint(
+      [
+        'POSE DEBUG — view=${size.width.toStringAsFixed(0)}x${size.height.toStringAsFixed(0)}',
+        'src=${transform.srcWidth.toStringAsFixed(1)}x${transform.srcHeight.toStringAsFixed(1)} '
+            'scale=${transform.scale.toStringAsFixed(4)} '
+            'dx=${transform.dx.toStringAsFixed(1)} dy=${transform.dy.toStringAsFixed(1)}',
+        if (bb != null)
+          'poseBB(view)=L${bb.left.toStringAsFixed(1)} T${bb.top.toStringAsFixed(1)} '
+              'W${bb.width.toStringAsFixed(1)} H${bb.height.toStringAsFixed(1)}',
+        if (nb != null)
+          'poseNB(norm)=L${nb.left.toStringAsFixed(3)} T${nb.top.toStringAsFixed(3)} '
+              'R${nb.right.toStringAsFixed(3)} B${nb.bottom.toStringAsFixed(3)}',
+        if (noseRaw != null)
+          'noseRaw=(${noseRaw.x.toStringAsFixed(3)}, ${noseRaw.y.toStringAsFixed(3)}) '
+              '${noseConf != null ? 'conf=${noseConf.toStringAsFixed(2)}' : ''}',
+        if (noseView != null)
+          'noseView=${noseView.dx.toStringAsFixed(1)}, ${noseView.dy.toStringAsFixed(1)}',
+        if (altGlobalNormView != null)
+          'alt[norm-global] view=${altGlobalNormView.dx.toStringAsFixed(1)}, '
+              '${altGlobalNormView.dy.toStringAsFixed(1)}',
+        if (altBoxNormView != null)
+          'alt[norm-bbox] view=${altBoxNormView.dx.toStringAsFixed(1)}, '
+              '${altBoxNormView.dy.toStringAsFixed(1)}',
+        if (leftEyeRaw != null && leftEyeView != null)
+          'leftEye raw=(${leftEyeRaw.x.toStringAsFixed(3)}, ${leftEyeRaw.y.toStringAsFixed(3)}) '
+              'view=${leftEyeView.dx.toStringAsFixed(1)}, ${leftEyeView.dy.toStringAsFixed(1)}',
+        if (rightEyeRaw != null && rightEyeView != null)
+          'rightEye raw=(${rightEyeRaw.x.toStringAsFixed(3)}, ${rightEyeRaw.y.toStringAsFixed(3)}) '
+              'view=${rightEyeView.dx.toStringAsFixed(1)}, ${rightEyeView.dy.toStringAsFixed(1)}',
+        if (faceRectView != null)
+          'faceRectView=L${faceRectView.left.toStringAsFixed(1)} '
+              'T${faceRectView.top.toStringAsFixed(1)} '
+              'W${faceRectView.width.toStringAsFixed(1)} '
+              'H${faceRectView.height.toStringAsFixed(1)}',
+        if (segBB != null)
+          'segBB(view)=L${segBB.left.toStringAsFixed(1)} T${segBB.top.toStringAsFixed(1)} '
+              'W${segBB.width.toStringAsFixed(1)} H${segBB.height.toStringAsFixed(1)}',
+        if (segNB != null)
+          'segNB(norm)=L${segNB.left.toStringAsFixed(3)} T${segNB.top.toStringAsFixed(3)} '
+              'R${segNB.right.toStringAsFixed(3)} B${segNB.bottom.toStringAsFixed(3)}',
+        if (flipHorizontal || flipVertical)
+          'flips: h=$flipHorizontal v=$flipVertical',
+      ].join(' | '),
+    );
+  }
+
   Rect? _mapRectToCanvas(Rect? rect, _LetterboxTransform transform, Size size) {
     if (rect == null || rect.isEmpty) return null;
     final topLeft = _mapPointToCanvas(rect.topLeft, transform, size);
@@ -476,13 +603,17 @@ class _PoseOverlayPainter extends CustomPainter {
     Size size,
   ) {
     if (imagePoint == null) return null;
-    final viewPoint = transform.imageToView(imagePoint);
-    var dx = viewPoint.dx;
-    var dy = viewPoint.dy;
-    if (flipHorizontal) dx = size.width - dx;
-    if (flipVertical) dy = size.height - dy;
-    if (!dx.isFinite || !dy.isFinite) return null;
-    return Offset(dx.clamp(0.0, size.width), dy.clamp(0.0, size.height));
+    // Apply flips in IMAGE space to match mask overlay semantics, then map.
+    final flipped = Offset(
+      flipHorizontal ? (transform.srcWidth - imagePoint.dx) : imagePoint.dx,
+      flipVertical ? (transform.srcHeight - imagePoint.dy) : imagePoint.dy,
+    );
+    final viewPoint = transform.imageToView(flipped);
+    if (!viewPoint.dx.isFinite || !viewPoint.dy.isFinite) return null;
+    return Offset(
+      viewPoint.dx.clamp(0.0, size.width),
+      viewPoint.dy.clamp(0.0, size.height),
+    );
   }
 
   Rect _clampRectToImage(Rect rect, _LetterboxTransform transform) {

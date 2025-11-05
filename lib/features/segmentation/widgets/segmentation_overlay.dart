@@ -128,8 +128,17 @@ class _SegmentationMaskPainter extends CustomPainter {
     final scale = scaleX > scaleY ? scaleX : scaleY;
     final scaledWidth = sourceWidth * scale;
     final scaledHeight = sourceHeight * scale;
-    final dx = (size.width - scaledWidth) / 2;
-    final dy = (size.height - scaledHeight) / 2;
+    final dx = (size.width - scaledWidth) / 2.0;
+    final dy = (size.height - scaledHeight) / 2.0;
+
+    _logTransformOnce(
+      view: size,
+      sourceW: sourceWidth,
+      sourceH: sourceHeight,
+      scale: scale,
+      dx: dx,
+      dy: dy,
+    );
 
     final backgroundPaint = Paint()
       ..color = Colors.black.withValues(alpha: 0.5);
@@ -266,5 +275,30 @@ class _SegmentationMaskPainter extends CustomPainter {
     if (value < min) return min;
     if (value > max) return max;
     return value;
+  }
+
+  // Lightweight throttled logger for transform parameters – useful to compare
+  // with pose keypoint mapping.
+  static DateTime? _lastTransformLog;
+  void _logTransformOnce({
+    required Size view,
+    required double sourceW,
+    required double sourceH,
+    required double scale,
+    required double dx,
+    required double dy,
+  }) {
+    final now = DateTime.now();
+    if (_lastTransformLog != null &&
+        now.difference(_lastTransformLog!).inMilliseconds < 1000) {
+      return;
+    }
+    _lastTransformLog = now;
+    debugPrint(
+      'SEGMENTATION DEBUG — view=${view.width.toStringAsFixed(0)}x${view.height.toStringAsFixed(0)} '
+      'src=${sourceW.toStringAsFixed(1)}x${sourceH.toStringAsFixed(1)} '
+      'scale=${scale.toStringAsFixed(4)} dx=${dx.toStringAsFixed(1)} dy=${dy.toStringAsFixed(1)} '
+      'flip(h:$flipHorizontal v:$flipVertical)',
+    );
   }
 }

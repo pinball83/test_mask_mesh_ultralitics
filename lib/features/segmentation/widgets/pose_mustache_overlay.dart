@@ -244,6 +244,20 @@ class _PoseMustachePainter extends CustomPainter {
     canvas.restore();
 
     if (debug) {
+      _logDebug(
+        size: size,
+        vt: viewTransform,
+        detection: detection,
+        nose: nose,
+        leftEye: leftEye,
+        rightEye: rightEye,
+        leftEar: leftEar,
+        rightEar: rightEar,
+        rotation: rotation,
+      );
+    }
+
+    if (debug) {
       // Visualize candidate detections with mapped nose points
       final nosePaint = Paint()
         ..style = PaintingStyle.fill
@@ -316,6 +330,90 @@ class _PoseMustachePainter extends CustomPainter {
     }
   }
 
+  static DateTime? _lastLog;
+  void _logDebug({
+    required Size size,
+    required _ViewTransform vt,
+    required YOLOResult detection,
+    required Offset? nose,
+    required Offset? leftEye,
+    required Offset? rightEye,
+    required Offset? leftEar,
+    required Offset? rightEar,
+    required double rotation,
+  }) {
+    final now = DateTime.now();
+    if (_lastLog != null && now.difference(_lastLog!).inMilliseconds < 500) {
+      return; // throttle
+    }
+    _lastLog = now;
+
+    final bb = detection.boundingBox;
+    final nb = detection.normalizedBox;
+    final kp = detection.keypoints;
+    final kc = detection.keypointConfidences;
+    final noseRaw = (kp != null && kp.isNotEmpty) ? kp[_noseIndex] : null;
+    final noseConf = (kc != null && kc.isNotEmpty) ? kc[_noseIndex] : null;
+
+    Offset? altGlobalNormView;
+    Offset? altBoxNormView;
+    if (noseRaw != null) {
+      final looksNormalized =
+          noseRaw.x >= 0.0 && noseRaw.x <= 1.0 &&
+          noseRaw.y >= 0.0 && noseRaw.y <= 1.0;
+      if (looksNormalized) {
+        final imagePoint = Offset(
+          noseRaw.x * vt.scaledWidth / vt.scale, // srcWidth
+          noseRaw.y * vt.scaledHeight / vt.scale, // srcHeight
+        );
+        altGlobalNormView = Offset(
+          vt.dx + imagePoint.dx * vt.scale,
+          vt.dy + imagePoint.dy * vt.scale,
+        );
+        if (!bb.isEmpty) {
+          final bx = (bb.left - vt.dx) / vt.scale;
+          final by = (bb.top - vt.dy) / vt.scale;
+          final bw = bb.width / vt.scale;
+          final bh = bb.height / vt.scale;
+          final noseImage = Offset(bx + noseRaw.x * bw, by + noseRaw.y * bh);
+          altBoxNormView = Offset(
+            vt.dx + noseImage.dx * vt.scale,
+            vt.dy + noseImage.dy * vt.scale,
+          );
+        }
+      }
+    }
+
+    debugPrint(
+      [
+        'POSE(M) DEBUG — view=${size.width.toStringAsFixed(0)}x${size.height.toStringAsFixed(0)}',
+        'scale=${vt.scale.toStringAsFixed(4)} dx=${vt.dx.toStringAsFixed(1)} dy=${vt.dy.toStringAsFixed(1)} '
+            'scaledW=${vt.scaledWidth.toStringAsFixed(1)} scaledH=${vt.scaledHeight.toStringAsFixed(1)}',
+        'bb(view)=L${bb.left.toStringAsFixed(1)} T${bb.top.toStringAsFixed(1)} W${bb.width.toStringAsFixed(1)} H${bb.height.toStringAsFixed(1)}',
+        'nb(norm)=L${nb.left.toStringAsFixed(3)} T${nb.top.toStringAsFixed(3)} R${nb.right.toStringAsFixed(3)} B${nb.bottom.toStringAsFixed(3)}',
+        if (noseRaw != null)
+          'noseRaw=(${noseRaw.x.toStringAsFixed(3)}, ${noseRaw.y.toStringAsFixed(3)}) '
+              '${noseConf != null ? 'conf=${noseConf.toStringAsFixed(2)}' : ''}',
+        if (nose != null)
+          'noseView=${nose.dx.toStringAsFixed(1)}, ${nose.dy.toStringAsFixed(1)}',
+        if (altGlobalNormView != null)
+          'alt[norm-global]=${altGlobalNormView.dx.toStringAsFixed(1)}, ${altGlobalNormView.dy.toStringAsFixed(1)}',
+        if (altBoxNormView != null)
+          'alt[norm-bbox]=${altBoxNormView.dx.toStringAsFixed(1)}, ${altBoxNormView.dy.toStringAsFixed(1)}',
+        if (leftEye != null)
+          'leftEye=${leftEye.dx.toStringAsFixed(1)}, ${leftEye.dy.toStringAsFixed(1)}',
+        if (rightEye != null)
+          'rightEye=${rightEye.dx.toStringAsFixed(1)}, ${rightEye.dy.toStringAsFixed(1)}',
+        if (leftEar != null)
+          'leftEar=${leftEar.dx.toStringAsFixed(1)}, ${leftEar.dy.toStringAsFixed(1)}',
+        if (rightEar != null)
+          'rightEar=${rightEar.dx.toStringAsFixed(1)}, ${rightEar.dy.toStringAsFixed(1)}',
+        'rotationDeg=${(rotation * 180 / pi).toStringAsFixed(1)} '
+            'flip(h:$flipHorizontal v:$flipVertical)'
+      ].join(' | '),
+    );
+  }
+
   double _resolveMustacheWidth({
     required YOLOResult detection,
     required Size viewSize,
@@ -382,20 +480,36 @@ class _PoseMustachePainter extends CustomPainter {
     }
 
     final p = keypoints[index];
-    final bb = detection.boundingBox;
+    Offset? imagePoint;
 
-    // Deterministic rule: if 0..1 -> relative to bb; else -> pixels scaled to view
-    Offset mapped;
     final looksNormalized = p.x >= 0 && p.x <= 1 && p.y >= 0 && p.y <= 1;
-    if (looksNormalized && !bb.isEmpty) {
-      mapped = Offset(bb.left + p.x * bb.width, bb.top + p.y * bb.height);
+    if (looksNormalized && !detection.boundingBox.isEmpty) {
+      // Interpret as bbox-relative normalized, but convert the bbox to IMAGE space first.
+      final bboxImage = viewTransform.viewRectToImage(detection.boundingBox);
+      imagePoint = Offset(
+        bboxImage.left + p.x * bboxImage.width,
+        bboxImage.top + p.y * bboxImage.height,
+      );
     } else {
-      // Raw keypoints are already in view coordinates; use as-is.
-      mapped = Offset(p.x.toDouble(), p.y.toDouble());
+      // Interpret as VIEW pixel coordinates and convert to IMAGE space.
+      final viewPoint = Offset(p.x.toDouble(), p.y.toDouble());
+      imagePoint = viewTransform.viewToImage(viewPoint);
     }
 
-    if (!mapped.dx.isFinite || !mapped.dy.isFinite) return null;
-    return _applyFlip(mapped, viewSize);
+    if (!imagePoint.dx.isFinite || !imagePoint.dy.isFinite) return null;
+
+    // Apply flips in IMAGE space to match mask overlay semantics.
+    final flippedImage = Offset(
+      flipHorizontal ? (viewTransform.srcWidth - imagePoint.dx) : imagePoint.dx,
+      flipVertical ? (viewTransform.srcHeight - imagePoint.dy) : imagePoint.dy,
+    );
+
+    final viewPoint = viewTransform.imageToView(flippedImage);
+    if (!viewPoint.dx.isFinite || !viewPoint.dy.isFinite) return null;
+    return Offset(
+      viewPoint.dx.clamp(0.0, viewSize.width),
+      viewPoint.dy.clamp(0.0, viewSize.height),
+    );
   }
 
   YOLOResult? _pickPrimaryDetection(List<YOLOResult> list, Size viewSize) {
@@ -458,6 +572,26 @@ class _ViewTransform {
   final double dy; // vertical letterbox offset in view
   final double scaledWidth; // width of the scaled source within view
   final double scaledHeight; // height of the scaled source within view
+
+  double get srcWidth => scaledWidth / scale;
+  double get srcHeight => scaledHeight / scale;
+
+  Offset imageToView(Offset imagePoint) {
+    return Offset(dx + imagePoint.dx * scale, dy + imagePoint.dy * scale);
+  }
+
+  Offset viewToImage(Offset viewPoint) {
+    return Offset((viewPoint.dx - dx) / scale, (viewPoint.dy - dy) / scale);
+  }
+
+  Rect viewRectToImage(Rect rect) {
+    return Rect.fromLTRB(
+      (rect.left - dx) / scale,
+      (rect.top - dy) / scale,
+      (rect.right - dx) / scale,
+      (rect.bottom - dy) / scale,
+    );
+  }
 
   // Heuristic mapping: if keypoint looks normalized (<= 1.5),
   // spread across the scaled content; otherwise treat as pixel coords

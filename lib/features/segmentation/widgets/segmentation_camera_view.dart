@@ -82,7 +82,11 @@ List<Widget> _buildOverlays(SegmentationController controller) {
       overlays.add(
         Positioned.fill(
           child: SelfieShaderOverlay(
-            detections: controller.detections,
+            // Pass only segmentation detections to ensure transform (srcW/H)
+            // is derived from the same reference as the background overlay.
+            detections: controller.detections
+                .where((d) => (d.mask?.isNotEmpty ?? false))
+                .toList(growable: false),
             poseDetections: controller.poseDetections,
             flipHorizontal: controller.flipMaskHorizontal,
             flipVertical: controller.flipMaskVertical,
@@ -108,7 +112,9 @@ List<Widget> _buildOverlays(SegmentationController controller) {
       overlays.add(
         Positioned.fill(
           child: SelfieShaderOverlay(
-            detections: controller.detections,
+            detections: controller.detections
+                .where((d) => (d.mask?.isNotEmpty ?? false))
+                .toList(growable: false),
             poseDetections: controller.poseDetections,
             flipHorizontal: controller.flipMaskHorizontal,
             flipVertical: controller.flipMaskVertical,
