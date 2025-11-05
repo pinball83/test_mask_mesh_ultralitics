@@ -503,7 +503,7 @@ class _PoseOverlayPainter extends CustomPainter {
     final nb = pose?.normalizedBox;
     final kp = pose?.keypoints;
     final kc = pose?.keypointConfidences;
-    final noseRaw = (kp != null && kp.length > 0) ? kp[0] : null;
+    final noseRaw = (kp != null && kp.isNotEmpty) ? kp[0] : null;
     final leftEyeRaw = (kp != null && kp.length > 1) ? kp[1] : null;
     final rightEyeRaw = (kp != null && kp.length > 2) ? kp[2] : null;
     final noseConf = (kc != null && kc.isNotEmpty) ? kc[0] : null;
@@ -513,8 +513,10 @@ class _PoseOverlayPainter extends CustomPainter {
     Offset? altBoxNormView;
     if (noseRaw != null) {
       final looksNormalized =
-          noseRaw.x >= 0.0 && noseRaw.x <= 1.0 &&
-          noseRaw.y >= 0.0 && noseRaw.y <= 1.0;
+          noseRaw.x >= 0.0 &&
+          noseRaw.x <= 1.0 &&
+          noseRaw.y >= 0.0 &&
+          noseRaw.y <= 1.0;
       if (looksNormalized) {
         // Treat as global normalized (0..1 across source image)
         final imagePoint = Offset(
@@ -655,12 +657,12 @@ class _PoseOverlayPainter extends CustomPainter {
       growable: false,
     );
 
+    var delta = Offset(40, 30);
     Offset? noseBridgeEnd;
     Offset? nose;
     final nosePoint = _pointWithThreshold(points, 0, _noseConfidence);
     if (nosePoint != null) {
-      noseBridgeEnd = nosePoint.imagePosition;
-      nose = nosePoint.imagePosition;
+      noseBridgeEnd = nose = nosePoint.imagePosition - delta;
     }
 
     Offset? noseBridgeStart;
@@ -668,11 +670,12 @@ class _PoseOverlayPainter extends CustomPainter {
     Offset? rightEyePosition;
     final leftEyePoint = _pointWithThreshold(points, 1, _eyeConfidence);
     final rightEyePoint = _pointWithThreshold(points, 2, _eyeConfidence);
+
     if (leftEyePoint != null) {
-      leftEyePosition = leftEyePoint.imagePosition;
+      leftEyePosition = leftEyePoint.imagePosition - delta;
     }
     if (rightEyePoint != null) {
-      rightEyePosition = rightEyePoint.imagePosition;
+      rightEyePosition = rightEyePoint.imagePosition - delta;
     }
     if (leftEyePosition != null && rightEyePosition != null) {
       noseBridgeStart = Offset(
