@@ -87,12 +87,13 @@ class _SelfieShaderOverlayState extends State<SelfieShaderOverlay> {
 
   void _updateSourceSize() {
     setState(() {
-      _srcW = _estimateSourceWidth(widget.detections);
-      _srcH = _estimateSourceHeight(widget.detections);
+      final size = _estimateSourceSize(widget.detections);
+      _srcW = size?.width;
+      _srcH = size?.height;
     });
   }
 
-  double? _estimateSourceWidth(List<YOLOResult> list) {
+  Size? _estimateSourceSize(List<YOLOResult> list) {
     // Prefer segmentation detections (with non-empty mask) for estimating
     // original source size, since their boxes are the reference used by
     // the background overlay.
@@ -100,29 +101,36 @@ class _SelfieShaderOverlayState extends State<SelfieShaderOverlay> {
       ...list.where((d) => (d.mask?.isNotEmpty ?? false)),
       ...list.where((d) => !(d.mask?.isNotEmpty ?? false)),
     ];
-    for (final d in ordered) {
-      final nb = d.normalizedBox;
-      final bb = d.boundingBox;
-      if (nb.width > 0 && bb.width > 0 && nb.width.isFinite) {
-        final candidate = bb.width / nb.width;
-        if (candidate.isFinite && candidate > 0) return candidate;
-      }
-    }
-    return null;
-  }
 
-  double? _estimateSourceHeight(List<YOLOResult> list) {
-    final ordered = [
-      ...list.where((d) => (d.mask?.isNotEmpty ?? false)),
-      ...list.where((d) => !(d.mask?.isNotEmpty ?? false)),
-    ];
+    double? width;
+    double? height;
+
     for (final d in ordered) {
       final nb = d.normalizedBox;
       final bb = d.boundingBox;
-      if (nb.height > 0 && bb.height > 0 && nb.height.isFinite) {
-        final candidate = bb.height / nb.height;
-        if (candidate.isFinite && candidate > 0) return candidate;
+
+      if (width == null && nb.width > 0 && bb.width > 0 && nb.width.isFinite) {
+        final candidate = bb.width / nb.width;
+        if (candidate.isFinite && candidate > 0) {
+          width = candidate;
+        }
       }
+
+      if (height == null &&
+          nb.height > 0 &&
+          bb.height > 0 &&
+          nb.height.isFinite) {
+        final candidate = bb.height / nb.height;
+        if (candidate.isFinite && candidate > 0) {
+          height = candidate;
+        }
+      }
+
+      if (width != null && height != null) break;
+    }
+
+    if (width != null && height != null) {
+      return Size(width, height);
     }
     return null;
   }
@@ -177,13 +185,60 @@ class _PoseOverlayPainter extends CustomPainter {
   final bool debugPose;
   final bool showMustache;
 
-  static const double _minMustacheWidth = 24;
+  // Mustache sizing constants
+  static const double _minMustacheWidth = 24.0;
   static const double _maxMustacheWidthFactor = 0.8;
   static const double _fallbackWidthFactor = 0.5;
+  static const double _fallbackWidthFactorUnsafe = 0.3;
   static const double _eyeWidthMultiplier = 1.8;
+
+  // Confidence thresholds
   static const double _noseConfidence = 0.15;
   static const double _eyeConfidence = 0.25;
   static const double _candidateConfidence = 0.05;
+
+  // Keypoint position correction (in image space)
+  static const Offset _keypointCorrection = Offset(90.0, 100.0);
+
+  // Mustache positioning correction (in view space, scaled)
+  static const double _mustacheCorrectionFactor = 10.0;
+
+  // Upper lip detection limits (relative to face rect)
+  static const double _upperLipVerticalLimitFactor = 0.35;
+  static const double _upperLipHorizontalLimitFactor = 0.45;
+  static const double _upperLipMinWidthFactor = 0.05;
+
+  // Pose selection scoring
+  static const double _poseScoreAreaWeight = 0.5;
+  static const double _poseScoreDistancePenalty = 2.0;
+
+  // Alpha threshold for color filter
+  static const double _alphaThreshold = 0.99;
+
+  // Debug paint constants
+  static const double _debugFaceStrokeWidth = 1.2;
+  static const double _debugEyeOutlineRadius = 7.0;
+  static const double _debugEyeFillRadius = 3.0;
+  static const double _debugEyeStrokeWidth = 2.0;
+  static const double _debugNoseRadius = 5.0;
+  static const double _debugNoseCrossSize = 6.0;
+  static const double _debugNoseStrokeWidth = 1.1;
+  static const double _debugLipRadius = 4.0;
+  static const double _debugHelperStrokeWidth = 1.4;
+
+  // Debug colors
+  static const Color _debugFaceColor = Colors.limeAccent;
+  static const double _debugFaceAlpha = 0.6;
+  static const Color _debugEyeColor = Colors.cyanAccent;
+  static const double _debugEyeAlpha = 0.35;
+  static const Color _debugHelperColor = Colors.amberAccent;
+  static const double _debugHelperAlpha = 0.8;
+  static const Color _debugNoseColor = Colors.deepOrangeAccent;
+  static const Color _debugLipColor = Colors.purpleAccent;
+  static const double _debugLipAlpha = 0.7;
+
+  // Debug logging throttle (milliseconds)
+  static const int _debugLogThrottleMs = 500;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -198,49 +253,37 @@ class _PoseOverlayPainter extends CustomPainter {
     final poseDetection = _pickPrimaryPose(poseDetections, size);
     final maskDetection = _pickPrimaryMask(detections);
 
-    Rect? faceRectImage;
-    Offset? noseImage;
-    Offset? leftEyeImage;
-    Offset? rightEyeImage;
-    Offset? noseBridgeStartImage;
-    Offset? noseBridgeEndImage;
-    Offset? upperLipImage;
+    final landmarks = poseDetection != null
+        ? _extractPoseLandmarks(
+            detection: poseDetection,
+            transform: transform,
+            actualViewSize: size,
+          )
+        : null;
 
-    if (poseDetection != null) {
-      final landmarks = _extractPoseLandmarks(
-        detection: poseDetection,
-        transform: transform,
-        seedRect: faceRectImage,
-        actualViewSize: size,
-      );
-      faceRectImage = landmarks.faceRect ?? faceRectImage;
-      noseImage = landmarks.nose;
-      leftEyeImage = landmarks.leftEye;
-      rightEyeImage = landmarks.rightEye;
-      noseBridgeStartImage = landmarks.noseBridgeStart;
-      noseBridgeEndImage = landmarks.noseBridgeEnd ?? noseImage;
-      upperLipImage = landmarks.upperLipCenter;
-    }
+    final faceRectImage =
+        landmarks?.faceRect ??
+        (maskDetection != null
+            ? transform.viewRectToImage(maskDetection.boundingBox)
+            : null);
 
-    if (faceRectImage == null && maskDetection != null) {
-      faceRectImage = transform.viewRectToImage(maskDetection.boundingBox);
-    }
-
-    final faceRectView = _mapRectToCanvas(faceRectImage, transform, size);
-    final noseView = _mapPointToCanvas(noseImage, transform, size);
-    final leftEyeView = _mapPointToCanvas(leftEyeImage, transform, size);
-    final rightEyeView = _mapPointToCanvas(rightEyeImage, transform, size);
-    final noseBridgeStartView = _mapPointToCanvas(
-      noseBridgeStartImage,
-      transform,
-      size,
+    final viewPoints = _ViewPoints(
+      faceRect: _mapRectToCanvas(faceRectImage, transform, size),
+      nose: _mapPointToCanvas(landmarks?.nose, transform, size),
+      leftEye: _mapPointToCanvas(landmarks?.leftEye, transform, size),
+      rightEye: _mapPointToCanvas(landmarks?.rightEye, transform, size),
+      noseBridgeStart: _mapPointToCanvas(
+        landmarks?.noseBridgeStart,
+        transform,
+        size,
+      ),
+      noseBridgeEnd: _mapPointToCanvas(
+        landmarks?.noseBridgeEnd ?? landmarks?.nose,
+        transform,
+        size,
+      ),
+      upperLip: _mapPointToCanvas(landmarks?.upperLipCenter, transform, size),
     );
-    final noseBridgeEndView = _mapPointToCanvas(
-      noseBridgeEndImage,
-      transform,
-      size,
-    );
-    final upperLipView = _mapPointToCanvas(upperLipImage, transform, size);
 
     if (debugPose) {
       _logDebugPoseMapping(
@@ -248,35 +291,16 @@ class _PoseOverlayPainter extends CustomPainter {
         transform: transform,
         pose: poseDetection,
         mask: maskDetection,
-        faceRectView: faceRectView,
-        noseView: noseView,
-        leftEyeView: leftEyeView,
-        rightEyeView: rightEyeView,
+        viewPoints: viewPoints,
       );
     }
 
-    _drawMustache(
-      canvas,
-      size,
-      transform: transform,
-      faceRectView: faceRectView,
-      leftEye: leftEyeView,
-      rightEye: rightEyeView,
-      nose: noseView,
-      noseBridgeEnd: noseBridgeEndView,
-    );
+    if (showMustache) {
+      _drawMustache(canvas, size, transform: transform, viewPoints: viewPoints);
+    }
 
     if (debugPose) {
-      _drawDebug(
-        canvas,
-        faceRect: faceRectView,
-        leftEye: leftEyeView,
-        rightEye: rightEyeView,
-        nose: noseView,
-        noseBridgeStart: noseBridgeStartView,
-        noseBridgeEnd: noseBridgeEndView,
-        upperLip: upperLipView,
-      );
+      _drawDebug(canvas, viewPoints);
     }
   }
 
@@ -284,37 +308,23 @@ class _PoseOverlayPainter extends CustomPainter {
     Canvas canvas,
     Size size, {
     required _LetterboxTransform transform,
-    Rect? faceRectView,
-    Offset? leftEye,
-    Offset? rightEye,
-    Offset? nose,
-    Offset? noseBridgeEnd,
+    required _ViewPoints viewPoints,
   }) {
-    if (!showMustache) return;
     final image = mustacheImage;
     if (image == null) return;
 
-    final width = _resolveMustacheWidth(
-      faceRectView: faceRectView,
-      leftEye: leftEye,
-      rightEye: rightEye,
-      viewSize: size,
-    );
+    final width = _resolveMustacheWidth(viewPoints: viewPoints, viewSize: size);
     final height = width * (image.height / image.width);
 
-    double rotation = 0;
-    if (leftEye != null && rightEye != null) {
-      rotation = math.atan2(rightEye.dy - leftEye.dy, rightEye.dx - leftEye.dx);
-    }
-
-    final anchor =
-        nose ??
-        noseBridgeEnd ??
-        faceRectView?.center ??
-        Offset(size.width / 2, size.height / 2);
-    // Apply minimal correction in view space to center mask on nose
-    final correction = Offset(10 * transform.scale, 10 * transform.scale);
-    final center = Offset(anchor.dx - correction.dx, anchor.dy - correction.dy);
+    final rotation = _calculateRotation(
+      viewPoints.leftEye,
+      viewPoints.rightEye,
+    );
+    final anchor = _selectAnchor(viewPoints, size);
+    final center = _calculateMustacheCenter(
+      anchor: anchor,
+      transform: transform,
+    );
 
     canvas.save();
     canvas.translate(center.dx, center.dy);
@@ -334,7 +344,7 @@ class _PoseOverlayPainter extends CustomPainter {
       image: image,
       fit: BoxFit.contain,
       filterQuality: FilterQuality.high,
-      colorFilter: mustacheAlpha < 0.99
+      colorFilter: mustacheAlpha < _alphaThreshold
           ? ColorFilter.mode(
               Colors.white.withValues(alpha: mustacheAlpha),
               BlendMode.modulate,
@@ -345,97 +355,120 @@ class _PoseOverlayPainter extends CustomPainter {
     canvas.restore();
   }
 
-  void _drawDebug(
-    Canvas canvas, {
-    Rect? faceRect,
-    Offset? leftEye,
-    Offset? rightEye,
-    Offset? nose,
-    Offset? noseBridgeStart,
-    Offset? noseBridgeEnd,
-    Offset? upperLip,
+  double _calculateRotation(Offset? leftEye, Offset? rightEye) {
+    if (leftEye == null || rightEye == null) return 0.0;
+    return math.atan2(rightEye.dy - leftEye.dy, rightEye.dx - leftEye.dx);
+  }
+
+  Offset _selectAnchor(_ViewPoints viewPoints, Size size) {
+    return viewPoints.nose ??
+        viewPoints.noseBridgeEnd ??
+        viewPoints.faceRect?.center ??
+        Offset(size.width / 2, size.height / 2);
+  }
+
+  Offset _calculateMustacheCenter({
+    required Offset anchor,
+    required _LetterboxTransform transform,
   }) {
+    final correction = Offset(
+      _mustacheCorrectionFactor * transform.scale,
+      _mustacheCorrectionFactor * transform.scale,
+    );
+    return Offset(anchor.dx - correction.dx, anchor.dy - correction.dy);
+  }
+
+  void _drawDebug(Canvas canvas, _ViewPoints points) {
     final facePaint = Paint()
-      ..color = Colors.limeAccent.withValues(alpha: 0.6)
+      ..color = _debugFaceColor.withValues(alpha: _debugFaceAlpha)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.2;
+      ..strokeWidth = _debugFaceStrokeWidth;
+
     final eyeOutline = Paint()
-      ..color = Colors.cyanAccent
+      ..color = _debugEyeColor
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.0;
+      ..strokeWidth = _debugEyeStrokeWidth;
+
     final eyeFill = Paint()
-      ..color = Colors.cyanAccent.withValues(alpha: 0.35)
+      ..color = _debugEyeColor.withValues(alpha: _debugEyeAlpha)
       ..style = PaintingStyle.fill;
+
     final helperLine = Paint()
-      ..color = Colors.amberAccent.withValues(alpha: 0.8)
-      ..strokeWidth = 1.4;
+      ..color = _debugHelperColor.withValues(alpha: _debugHelperAlpha)
+      ..strokeWidth = _debugHelperStrokeWidth;
+
     final noseFill = Paint()
-      ..color = Colors.deepOrangeAccent
+      ..color = _debugNoseColor
       ..style = PaintingStyle.fill;
+
     final noseCross = Paint()
-      ..color = Colors.deepOrangeAccent
-      ..strokeWidth = 1.1;
+      ..color = _debugNoseColor
+      ..strokeWidth = _debugNoseStrokeWidth;
+
     final lipPaint = Paint()
-      ..color = Colors.purpleAccent.withValues(alpha: 0.7)
+      ..color = _debugLipColor.withValues(alpha: _debugLipAlpha)
       ..style = PaintingStyle.fill;
 
-    if (faceRect != null) {
-      canvas.drawRect(faceRect, facePaint);
+    if (points.faceRect != null) {
+      canvas.drawRect(points.faceRect!, facePaint);
     }
 
-    if (leftEye != null) {
-      canvas.drawCircle(leftEye, 7, eyeOutline);
-      canvas.drawCircle(leftEye, 3, eyeFill);
+    if (points.leftEye != null) {
+      canvas.drawCircle(points.leftEye!, _debugEyeOutlineRadius, eyeOutline);
+      canvas.drawCircle(points.leftEye!, _debugEyeFillRadius, eyeFill);
     }
-    if (rightEye != null) {
-      canvas.drawCircle(rightEye, 7, eyeOutline);
-      canvas.drawCircle(rightEye, 3, eyeFill);
+    if (points.rightEye != null) {
+      canvas.drawCircle(points.rightEye!, _debugEyeOutlineRadius, eyeOutline);
+      canvas.drawCircle(points.rightEye!, _debugEyeFillRadius, eyeFill);
     }
-    if (leftEye != null && rightEye != null) {
-      canvas.drawLine(leftEye, rightEye, helperLine);
+    if (points.leftEye != null && points.rightEye != null) {
+      canvas.drawLine(points.leftEye!, points.rightEye!, helperLine);
     }
 
-    if (nose != null) {
-      canvas.drawCircle(nose, 5, noseFill);
+    if (points.nose != null) {
+      canvas.drawCircle(points.nose!, _debugNoseRadius, noseFill);
+      final nose = points.nose!;
       canvas.drawLine(
-        Offset(nose.dx - 6, nose.dy),
-        Offset(nose.dx + 6, nose.dy),
+        Offset(nose.dx - _debugNoseCrossSize, nose.dy),
+        Offset(nose.dx + _debugNoseCrossSize, nose.dy),
         noseCross,
       );
       canvas.drawLine(
-        Offset(nose.dx, nose.dy - 6),
-        Offset(nose.dx, nose.dy + 6),
+        Offset(nose.dx, nose.dy - _debugNoseCrossSize),
+        Offset(nose.dx, nose.dy + _debugNoseCrossSize),
         noseCross,
       );
     }
 
-    if (noseBridgeStart != null && noseBridgeEnd != null) {
-      canvas.drawLine(noseBridgeStart, noseBridgeEnd, helperLine);
+    if (points.noseBridgeStart != null && points.noseBridgeEnd != null) {
+      canvas.drawLine(
+        points.noseBridgeStart!,
+        points.noseBridgeEnd!,
+        helperLine,
+      );
     }
 
-    if (upperLip != null) {
-      canvas.drawCircle(upperLip, 4, lipPaint);
+    if (points.upperLip != null) {
+      canvas.drawCircle(points.upperLip!, _debugLipRadius, lipPaint);
     }
   }
 
   double _resolveMustacheWidth({
-    required Rect? faceRectView,
-    required Offset? leftEye,
-    required Offset? rightEye,
+    required _ViewPoints viewPoints,
     required Size viewSize,
   }) {
     double width;
-    if (leftEye != null && rightEye != null) {
-      final eyeSpan = (leftEye - rightEye).distance;
+    if (viewPoints.leftEye != null && viewPoints.rightEye != null) {
+      final eyeSpan = (viewPoints.leftEye! - viewPoints.rightEye!).distance;
       width = eyeSpan * _eyeWidthMultiplier;
-    } else if (faceRectView != null) {
-      width = faceRectView.width * _fallbackWidthFactor;
+    } else if (viewPoints.faceRect != null) {
+      width = viewPoints.faceRect!.width * _fallbackWidthFactor;
     } else {
       width = viewSize.width * _fallbackWidthFactor;
     }
 
     if (!width.isFinite || width <= 0) {
-      width = viewSize.width * 0.3;
+      width = viewSize.width * _fallbackWidthFactorUnsafe;
     }
 
     return width.clamp(
@@ -470,12 +503,13 @@ class _PoseOverlayPainter extends CustomPainter {
       if (box.isEmpty) continue;
       final area = box.width.abs() * box.height.abs();
       if (area <= 0) continue;
-      final cx = box.left + box.width / 2;
-      final cy = box.top + box.height / 2;
-      final dx = cx - size.width / 2;
-      final dy = cy - size.height / 2;
-      final distPenalty = dx * dx + dy * dy;
-      final score = area * 0.5 - distPenalty * 2.0;
+      final center = Offset(box.left + box.width / 2, box.top + box.height / 2);
+      final viewCenter = Offset(size.width / 2, size.height / 2);
+      final dx = center.dx - viewCenter.dx;
+      final dy = center.dy - viewCenter.dy;
+      final distSquared = dx * dx + dy * dy;
+      final score =
+          area * _poseScoreAreaWeight - distSquared * _poseScoreDistancePenalty;
       if (score > bestScore) {
         bestScore = score;
         best = d;
@@ -484,21 +518,18 @@ class _PoseOverlayPainter extends CustomPainter {
     return best;
   }
 
-  // Throttled console logger to help debug mapping assumptions.
   static DateTime? _lastLog;
   void _logDebugPoseMapping({
     required Size size,
     required _LetterboxTransform transform,
     required YOLOResult? pose,
     required YOLOResult? mask,
-    required Rect? faceRectView,
-    required Offset? noseView,
-    required Offset? leftEyeView,
-    required Offset? rightEyeView,
+    required _ViewPoints viewPoints,
   }) {
     final now = DateTime.now();
-    if (_lastLog != null && now.difference(_lastLog!).inMilliseconds < 500) {
-      return; // throttle ~2 logs/sec
+    if (_lastLog != null &&
+        now.difference(_lastLog!).inMilliseconds < _debugLogThrottleMs) {
+      return;
     }
     _lastLog = now;
 
@@ -507,41 +538,7 @@ class _PoseOverlayPainter extends CustomPainter {
     final kp = pose?.keypoints;
     final kc = pose?.keypointConfidences;
     final noseRaw = (kp != null && kp.isNotEmpty) ? kp[0] : null;
-    final leftEyeRaw = (kp != null && kp.length > 1) ? kp[1] : null;
-    final rightEyeRaw = (kp != null && kp.length > 2) ? kp[2] : null;
     final noseConf = (kc != null && kc.isNotEmpty) ? kc[0] : null;
-
-    // Alternative mappings for the nose when it appears normalized.
-    Offset? altGlobalNormView;
-    Offset? altBoxNormView;
-    if (noseRaw != null) {
-      final looksNormalized =
-          noseRaw.x >= 0.0 &&
-          noseRaw.x <= 1.0 &&
-          noseRaw.y >= 0.0 &&
-          noseRaw.y <= 1.0;
-      if (looksNormalized) {
-        // Treat as global normalized (0..1 across source image)
-        final imagePoint = Offset(
-          noseRaw.x * transform.srcWidth,
-          noseRaw.y * transform.srcHeight,
-        );
-        altGlobalNormView = transform.imageToView(imagePoint);
-
-        // Treat as box-normalized (0..1 across bbox)
-        if (bb != null && !bb.isEmpty) {
-          final bboxImage = transform.viewRectToImage(bb);
-          final noseImage = Offset(
-            bboxImage.left + noseRaw.x * bboxImage.width,
-            bboxImage.top + noseRaw.y * bboxImage.height,
-          );
-          altBoxNormView = transform.imageToView(noseImage);
-        }
-      }
-    }
-
-    final segBB = mask?.boundingBox;
-    final segNB = mask?.normalizedBox;
 
     debugPrint(
       [
@@ -558,31 +555,18 @@ class _PoseOverlayPainter extends CustomPainter {
         if (noseRaw != null)
           'noseRaw=(${noseRaw.x.toStringAsFixed(3)}, ${noseRaw.y.toStringAsFixed(3)}) '
               '${noseConf != null ? 'conf=${noseConf.toStringAsFixed(2)}' : ''}',
-        if (noseView != null)
-          'noseView=${noseView.dx.toStringAsFixed(1)}, ${noseView.dy.toStringAsFixed(1)}',
-        if (altGlobalNormView != null)
-          'alt[norm-global] view=${altGlobalNormView.dx.toStringAsFixed(1)}, '
-              '${altGlobalNormView.dy.toStringAsFixed(1)}',
-        if (altBoxNormView != null)
-          'alt[norm-bbox] view=${altBoxNormView.dx.toStringAsFixed(1)}, '
-              '${altBoxNormView.dy.toStringAsFixed(1)}',
-        if (leftEyeRaw != null && leftEyeView != null)
-          'leftEye raw=(${leftEyeRaw.x.toStringAsFixed(3)}, ${leftEyeRaw.y.toStringAsFixed(3)}) '
-              'view=${leftEyeView.dx.toStringAsFixed(1)}, ${leftEyeView.dy.toStringAsFixed(1)}',
-        if (rightEyeRaw != null && rightEyeView != null)
-          'rightEye raw=(${rightEyeRaw.x.toStringAsFixed(3)}, ${rightEyeRaw.y.toStringAsFixed(3)}) '
-              'view=${rightEyeView.dx.toStringAsFixed(1)}, ${rightEyeView.dy.toStringAsFixed(1)}',
-        if (faceRectView != null)
-          'faceRectView=L${faceRectView.left.toStringAsFixed(1)} '
-              'T${faceRectView.top.toStringAsFixed(1)} '
-              'W${faceRectView.width.toStringAsFixed(1)} '
-              'H${faceRectView.height.toStringAsFixed(1)}',
-        if (segBB != null)
-          'segBB(view)=L${segBB.left.toStringAsFixed(1)} T${segBB.top.toStringAsFixed(1)} '
-              'W${segBB.width.toStringAsFixed(1)} H${segBB.height.toStringAsFixed(1)}',
-        if (segNB != null)
-          'segNB(norm)=L${segNB.left.toStringAsFixed(3)} T${segNB.top.toStringAsFixed(3)} '
-              'R${segNB.right.toStringAsFixed(3)} B${segNB.bottom.toStringAsFixed(3)}',
+        if (viewPoints.nose != null)
+          'noseView=${viewPoints.nose!.dx.toStringAsFixed(1)}, ${viewPoints.nose!.dy.toStringAsFixed(1)}',
+        if (viewPoints.faceRect != null)
+          'faceRectView=L${viewPoints.faceRect!.left.toStringAsFixed(1)} '
+              'T${viewPoints.faceRect!.top.toStringAsFixed(1)} '
+              'W${viewPoints.faceRect!.width.toStringAsFixed(1)} '
+              'H${viewPoints.faceRect!.height.toStringAsFixed(1)}',
+        if (mask?.boundingBox != null)
+          'segBB(view)=L${mask!.boundingBox.left.toStringAsFixed(1)} '
+              'T${mask.boundingBox.top.toStringAsFixed(1)} '
+              'W${mask.boundingBox.width.toStringAsFixed(1)} '
+              'H${mask.boundingBox.height.toStringAsFixed(1)}',
         if (flipHorizontal || flipVertical)
           'flips: h=$flipHorizontal v=$flipVertical',
       ].join(' | '),
@@ -635,11 +619,10 @@ class _PoseOverlayPainter extends CustomPainter {
   _PoseLandmarks _extractPoseLandmarks({
     required YOLOResult detection,
     required _LetterboxTransform transform,
-    Rect? seedRect,
     required Size actualViewSize,
   }) {
-    Rect? faceRect = seedRect;
-    if (faceRect == null && !detection.boundingBox.isEmpty) {
+    Rect? faceRect;
+    if (!detection.boundingBox.isEmpty) {
       faceRect = _clampRectToImage(
         transform.viewRectToImage(detection.boundingBox),
         transform,
@@ -662,80 +645,82 @@ class _PoseOverlayPainter extends CustomPainter {
       growable: false,
     );
 
-    var delta = Offset(90, 100);
-    Offset? noseBridgeEnd;
-    Offset? nose;
     final nosePoint = _pointWithThreshold(points, 0, _noseConfidence);
-    if (nosePoint != null) {
-      noseBridgeEnd = nose = nosePoint.imagePosition - delta;
-    }
-
-    Offset? noseBridgeStart;
-    Offset? leftEyePosition;
-    Offset? rightEyePosition;
     final leftEyePoint = _pointWithThreshold(points, 1, _eyeConfidence);
     final rightEyePoint = _pointWithThreshold(points, 2, _eyeConfidence);
 
-    if (leftEyePoint != null) {
-      leftEyePosition = leftEyePoint.imagePosition - delta;
-    }
-    if (rightEyePoint != null) {
-      rightEyePosition = rightEyePoint.imagePosition - delta;
-    }
-    if (leftEyePosition != null && rightEyePosition != null) {
-      noseBridgeStart = Offset(
-        (leftEyePosition.dx + rightEyePosition.dx) / 2,
-        (leftEyePosition.dy + rightEyePosition.dy) / 2,
-      );
-    }
+    final nose = nosePoint?.imagePosition != null
+        ? nosePoint!.imagePosition - _keypointCorrection
+        : null;
+    final noseBridgeEnd = nose;
 
-    Offset? upperLipCenter;
-    if (noseBridgeEnd != null && faceRect != null) {
-      final verticalLimit = faceRect.height * 0.35;
-      final horizontalLimit = faceRect.width * 0.45;
-      final candidates = <_PosePoint>[];
-      for (final pt in points) {
-        if (pt == null || pt.confidence < _candidateConfidence) continue;
-        final pos = pt.imagePosition;
-        if (pos.dy <= noseBridgeEnd.dy) continue;
-        if (pos.dy > noseBridgeEnd.dy + verticalLimit) continue;
-        if ((pos.dx - noseBridgeEnd.dx).abs() > horizontalLimit) continue;
-        candidates.add(pt);
-      }
+    final leftEye = leftEyePoint?.imagePosition != null
+        ? leftEyePoint!.imagePosition - _keypointCorrection
+        : null;
+    final rightEye = rightEyePoint?.imagePosition != null
+        ? rightEyePoint!.imagePosition - _keypointCorrection
+        : null;
 
-      if (candidates.isNotEmpty) {
-        candidates.sort(
-          (a, b) => a.imagePosition.dx.compareTo(b.imagePosition.dx),
-        );
-        final left = candidates.first.imagePosition;
-        final right = candidates.last.imagePosition;
-        if (candidates.length >= 2 &&
-            (right.dx - left.dx).abs() > faceRect.width * 0.05) {
-          upperLipCenter = Offset(
-            (left.dx + right.dx) / 2,
-            (left.dy + right.dy) / 2,
-          );
-        } else {
-          final avgX =
-              candidates.fold<double>(0, (sum, e) => sum + e.imagePosition.dx) /
-              candidates.length;
-          final avgY =
-              candidates.fold<double>(0, (sum, e) => sum + e.imagePosition.dy) /
-              candidates.length;
-          upperLipCenter = Offset(avgX, avgY);
-        }
-      }
-    }
+    final noseBridgeStart = (leftEye != null && rightEye != null)
+        ? Offset((leftEye.dx + rightEye.dx) / 2, (leftEye.dy + rightEye.dy) / 2)
+        : null;
+
+    final upperLipCenter = _findUpperLipCenter(
+      points: points,
+      noseBridgeEnd: noseBridgeEnd,
+      faceRect: faceRect,
+    );
 
     return _PoseLandmarks(
       faceRect: faceRect,
       noseBridgeStart: noseBridgeStart,
       noseBridgeEnd: noseBridgeEnd,
       upperLipCenter: upperLipCenter,
-      leftEye: leftEyePosition,
-      rightEye: rightEyePosition,
+      leftEye: leftEye,
+      rightEye: rightEye,
       nose: nose,
     );
+  }
+
+  Offset? _findUpperLipCenter({
+    required List<_PosePoint?> points,
+    required Offset? noseBridgeEnd,
+    required Rect? faceRect,
+  }) {
+    if (noseBridgeEnd == null || faceRect == null) return null;
+
+    final verticalLimit = faceRect.height * _upperLipVerticalLimitFactor;
+    final horizontalLimit = faceRect.width * _upperLipHorizontalLimitFactor;
+    final minWidth = faceRect.width * _upperLipMinWidthFactor;
+
+    final candidates = <_PosePoint>[];
+    for (final pt in points) {
+      if (pt == null || pt.confidence < _candidateConfidence) continue;
+      final pos = pt.imagePosition;
+      if (pos.dy <= noseBridgeEnd.dy) continue;
+      if (pos.dy > noseBridgeEnd.dy + verticalLimit) continue;
+      if ((pos.dx - noseBridgeEnd.dx).abs() > horizontalLimit) continue;
+      candidates.add(pt);
+    }
+
+    if (candidates.isEmpty) return null;
+
+    candidates.sort((a, b) => a.imagePosition.dx.compareTo(b.imagePosition.dx));
+    final left = candidates.first.imagePosition;
+    final right = candidates.last.imagePosition;
+
+    if (candidates.length >= 2 && (right.dx - left.dx).abs() > minWidth) {
+      return Offset((left.dx + right.dx) / 2, (left.dy + right.dy) / 2);
+    }
+
+    // Average of all candidates
+    final avgX =
+        candidates.fold<double>(0, (sum, e) => sum + e.imagePosition.dx) /
+        candidates.length;
+    final avgY =
+        candidates.fold<double>(0, (sum, e) => sum + e.imagePosition.dy) /
+        candidates.length;
+    return Offset(avgX, avgY);
   }
 
   _PosePoint? _mapPosePoint({
@@ -777,11 +762,11 @@ class _PoseOverlayPainter extends CustomPainter {
   }) {
     if (!point.x.isFinite || !point.y.isFinite) return null;
 
-    final looksNormalized =
+    // Check if normalized (0-1), treat as relative to bounding box
+    final isNormalized =
         point.x >= 0.0 && point.x <= 1.0 && point.y >= 0.0 && point.y <= 1.0;
 
-    // If normalized (0-1), treat as relative to bounding box
-    if (looksNormalized && !detection.boundingBox.isEmpty) {
+    if (isNormalized && !detection.boundingBox.isEmpty) {
       final bboxImage = transform.viewRectToImage(detection.boundingBox);
       return Offset(
         bboxImage.left + point.x * bboxImage.width,
@@ -789,15 +774,15 @@ class _PoseOverlayPainter extends CustomPainter {
       );
     }
 
-    // Check if coordinates are in view space range first
+    // Check if coordinates are in view space range
     // (YOLO pose keypoints are typically in view space, not image space)
     if (point.x >= 0 &&
         point.x <= viewSize.width &&
         point.y >= 0 &&
         point.y <= viewSize.height) {
-      // Keypoints are in view space - convert to image space
-      final viewPoint = Offset(point.x.toDouble(), point.y.toDouble());
-      final imagePoint = transform.viewToImage(viewPoint);
+      final imagePoint = transform.viewToImage(
+        Offset(point.x.toDouble(), point.y.toDouble()),
+      );
       return Offset(
         imagePoint.dx.clamp(0.0, transform.srcWidth),
         imagePoint.dy.clamp(0.0, transform.srcHeight),
@@ -811,7 +796,6 @@ class _PoseOverlayPainter extends CustomPainter {
         point.x <= maxExpectedCoord &&
         point.y >= 0 &&
         point.y <= maxExpectedCoord) {
-      // Likely already in image space - clamp to actual image bounds
       return Offset(
         point.x.clamp(0.0, transform.srcWidth),
         point.y.clamp(0.0, transform.srcHeight),
@@ -819,8 +803,9 @@ class _PoseOverlayPainter extends CustomPainter {
     }
 
     // Last resort: treat as view space and convert
-    final viewPoint = Offset(point.x.toDouble(), point.y.toDouble());
-    final imagePoint = transform.viewToImage(viewPoint);
+    final imagePoint = transform.viewToImage(
+      Offset(point.x.toDouble(), point.y.toDouble()),
+    );
     return Offset(
       imagePoint.dx.clamp(0.0, transform.srcWidth),
       imagePoint.dy.clamp(0.0, transform.srcHeight),
@@ -939,4 +924,24 @@ class _PosePoint {
 
   final Offset imagePosition;
   final double confidence;
+}
+
+class _ViewPoints {
+  const _ViewPoints({
+    this.faceRect,
+    this.nose,
+    this.leftEye,
+    this.rightEye,
+    this.noseBridgeStart,
+    this.noseBridgeEnd,
+    this.upperLip,
+  });
+
+  final Rect? faceRect;
+  final Offset? nose;
+  final Offset? leftEye;
+  final Offset? rightEye;
+  final Offset? noseBridgeStart;
+  final Offset? noseBridgeEnd;
+  final Offset? upperLip;
 }
