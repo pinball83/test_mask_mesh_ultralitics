@@ -197,11 +197,14 @@ class _PoseOverlayPainter extends CustomPainter {
   static const double _eyeConfidence = 0.25;
   static const double _candidateConfidence = 0.05;
 
-  // Keypoint position correction (in image space)
-  static const Offset _keypointCorrection = Offset(90.0, 100.0);
+  // Keypoint position correction (in view space, pixels)
+  // This correction compensates for offset between detected keypoints and actual
+  // facial feature positions. Set to Offset.zero if keypoints are already accurate.
+  static const Offset _keypointCorrectionView = Offset(30.0, 40.0);
 
   // Mustache positioning correction (in view space, scaled)
-  static const double _mustacheCorrectionFactor = 10.0;
+  // Small adjustment to center mustache mask on nose. Set to 0.0 if not needed.
+  static const double _mustacheCorrectionFactor = 0.0;
 
   // Upper lip detection limits (relative to face rect)
   static const double _upperLipVerticalLimitFactor = 0.35;
@@ -371,6 +374,11 @@ class _PoseOverlayPainter extends CustomPainter {
     required Offset anchor,
     required _LetterboxTransform transform,
   }) {
+    // Skip correction if it's zero
+    if (_mustacheCorrectionFactor == 0.0) {
+      return anchor;
+    }
+
     final correction = Offset(
       _mustacheCorrectionFactor * transform.scale,
       _mustacheCorrectionFactor * transform.scale,
@@ -586,6 +594,27 @@ class _PoseOverlayPainter extends CustomPainter {
     return Rect.fromLTRB(left, top, right, bottom);
   }
 
+  Offset? _applyKeypointCorrection(
+    Offset? imagePosition,
+    _LetterboxTransform transform,
+  ) {
+    if (imagePosition == null) return null;
+
+    // Skip correction if it's zero to avoid unnecessary transformations
+    if (_keypointCorrectionView.dx == 0.0 &&
+        _keypointCorrectionView.dy == 0.0) {
+      return imagePosition;
+    }
+
+    // Convert to view space, apply correction, then convert back to image space
+    final viewPoint = transform.imageToView(imagePosition);
+    final correctedView = Offset(
+      viewPoint.dx - _keypointCorrectionView.dx,
+      viewPoint.dy - _keypointCorrectionView.dy,
+    );
+    return transform.viewToImage(correctedView);
+  }
+
   Offset? _mapPointToCanvas(
     Offset? imagePoint,
     _LetterboxTransform transform,
@@ -649,17 +678,19 @@ class _PoseOverlayPainter extends CustomPainter {
     final leftEyePoint = _pointWithThreshold(points, 1, _eyeConfidence);
     final rightEyePoint = _pointWithThreshold(points, 2, _eyeConfidence);
 
-    final nose = nosePoint?.imagePosition != null
-        ? nosePoint!.imagePosition - _keypointCorrection
-        : null;
+    // Apply correction in view space to be independent of source image size
+    final nose = _applyKeypointCorrection(nosePoint?.imagePosition, transform);
     final noseBridgeEnd = nose;
 
-    final leftEye = leftEyePoint?.imagePosition != null
-        ? leftEyePoint!.imagePosition - _keypointCorrection
-        : null;
-    final rightEye = rightEyePoint?.imagePosition != null
-        ? rightEyePoint!.imagePosition - _keypointCorrection
-        : null;
+    final leftEye = _applyKeypointCorrection(
+      leftEyePoint?.imagePosition,
+      transform,
+    );
+
+    final rightEye = _applyKeypointCorrection(
+      rightEyePoint?.imagePosition,
+      transform,
+    );
 
     final noseBridgeStart = (leftEye != null && rightEye != null)
         ? Offset((leftEye.dx + rightEye.dx) / 2, (leftEye.dy + rightEye.dy) / 2)
