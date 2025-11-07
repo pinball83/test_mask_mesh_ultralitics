@@ -11,6 +11,7 @@ class SegmentationOverlay extends StatefulWidget {
     required this.flipHorizontal,
     required this.flipVertical,
     this.backgroundAsset = 'assets/images/bg_image.jpg',
+    this.maskSmoothing = 2.0,
   });
 
   final List<YOLOResult> detections;
@@ -18,6 +19,7 @@ class SegmentationOverlay extends StatefulWidget {
   final bool flipHorizontal;
   final bool flipVertical;
   final String? backgroundAsset;
+  final double maskSmoothing;
 
   @override
   State<SegmentationOverlay> createState() => _SegmentationOverlayState();
@@ -88,6 +90,7 @@ class _SegmentationOverlayState extends State<SegmentationOverlay> {
           flipHorizontal: widget.flipHorizontal,
           flipVertical: widget.flipVertical,
           backgroundImage: _backgroundImage,
+          maskSmoothing: widget.maskSmoothing,
         ),
       ),
     );
@@ -101,6 +104,7 @@ class _SegmentationMaskPainter extends CustomPainter {
     required this.flipHorizontal,
     required this.flipVertical,
     this.backgroundImage,
+    this.maskSmoothing = 2.0,
   });
 
   final List<YOLOResult> detections;
@@ -108,6 +112,7 @@ class _SegmentationMaskPainter extends CustomPainter {
   final bool flipHorizontal;
   final bool flipVertical;
   final ui.Image? backgroundImage;
+  final double maskSmoothing;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -153,6 +158,18 @@ class _SegmentationMaskPainter extends CustomPainter {
     } else {
       canvas.drawRect(Offset.zero & size, backgroundPaint);
     }
+
+    // Create a separate layer for mask with optional blur smoothing
+    final maskLayerRect = Rect.fromLTWH(0, 0, size.width, size.height);
+    final maskLayerPaint = Paint();
+    if (maskSmoothing > 0) {
+      maskLayerPaint.imageFilter = ui.ImageFilter.blur(
+        sigmaX: maskSmoothing,
+        sigmaY: maskSmoothing,
+      );
+    }
+    canvas.saveLayer(maskLayerRect, maskLayerPaint);
+
     final clearPaint = Paint()..blendMode = BlendMode.clear;
 
     for (final detection in detections) {
@@ -216,6 +233,8 @@ class _SegmentationMaskPainter extends CustomPainter {
       }
     }
 
+    canvas.restore(); // Restore mask layer (applies blur if enabled)
+
     canvas.restore();
     canvas.restore();
   }
@@ -225,7 +244,8 @@ class _SegmentationMaskPainter extends CustomPainter {
     return oldDelegate.detections != detections ||
         oldDelegate.maskThreshold != maskThreshold ||
         oldDelegate.flipHorizontal != flipHorizontal ||
-        oldDelegate.flipVertical != flipVertical;
+        oldDelegate.flipVertical != flipVertical ||
+        oldDelegate.maskSmoothing != maskSmoothing;
   }
 
   Size? _estimateSourceSize() {
