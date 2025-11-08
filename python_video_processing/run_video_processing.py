@@ -1,4 +1,3 @@
-
 import cv2
 import torch
 import numpy as np
@@ -10,10 +9,12 @@ import os
 
 # --- Утилиты и классы ---
 
+
 class LandmarksEMA:
     """
     Экспоненциальное скользящее среднее для сглаживания ключевых точек.
     """
+
     def __init__(self, alpha=0.6):
         self.alpha = alpha
         self.last_landmarks = None
@@ -23,9 +24,12 @@ class LandmarksEMA:
             self.last_landmarks = landmarks
             return landmarks
 
-        smoothed_landmarks = self.alpha * landmarks + (1 - self.alpha) * self.last_landmarks
+        smoothed_landmarks = (
+            self.alpha * landmarks + (1 - self.alpha) * self.last_landmarks
+        )
         self.last_landmarks = smoothed_landmarks
         return smoothed_landmarks
+
 
 def select_device():
     """
@@ -37,6 +41,7 @@ def select_device():
         return "cuda"
     return "cpu"
 
+
 def process_background(frame, seg_mask, mode, bg_image=None):
     """
     Обработка фона: размытие или замена.
@@ -45,13 +50,15 @@ def process_background(frame, seg_mask, mode, bg_image=None):
 
     # Убедимся, что маска бинарная и имеет правильные размеры
     if seg_mask.ndim == 3:
-        seg_mask = seg_mask.squeeze(0) # Убираем лишнее измерение, если есть
+        seg_mask = seg_mask.squeeze(0)  # Убираем лишнее измерение, если есть
 
     # Изменение размера маски до размеров кадра
     seg_mask_resized = cv2.resize(seg_mask, (w, h), interpolation=cv2.INTER_LINEAR)
 
     # Создание 3-канальной маски для смешивания
-    seg_mask_3ch = cv2.cvtColor((seg_mask_resized * 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
+    seg_mask_3ch = cv2.cvtColor(
+        (seg_mask_resized * 255).astype(np.uint8), cv2.COLOR_GRAY2BGR
+    )
 
     # Инвертированная маска для фона
     inv_mask = cv2.bitwise_not(seg_mask_3ch)
@@ -59,37 +66,61 @@ def process_background(frame, seg_mask, mode, bg_image=None):
     # Применяем маску к человеку
     person = cv2.bitwise_and(frame, seg_mask_3ch)
 
-    if mode == 'blur':
+    if mode == "blur":
         # Размываем фон
         blurred_frame = cv2.GaussianBlur(frame, (21, 21), 0)
         background = cv2.bitwise_and(blurred_frame, inv_mask)
-    elif mode == 'image' and bg_image is not None:
+    elif mode == "image" and bg_image is not None:
         # Заменяем фон изображением
         background = cv2.bitwise_and(bg_image, inv_mask)
-    else: # По умолчанию или если что-то пошло не так
+    else:  # По умолчанию или если что-то пошло не так
         background = cv2.bitwise_and(frame, inv_mask)
 
     return cv2.add(person, background)
 
+
 def overlay_png_affine(frame, overlay_rgba, dst_tri):
     """
-    Наложение PNG с использованием аффинной трансформации.
+    Наложение PNG с использованием аффинной трансформации, сохраняя пропорции.
+    Использует только 2 точки (глаза) для более стабильного масштаба.
+    Применяет масштабирование относительно центра, чтобы избежать сдвигов.
     """
     h, w = frame.shape[:2]
     overlay_h, overlay_w = overlay_rgba.shape[:2]
 
-    # Определение исходных точек на PNG-шаблоне
-    TEMPLATE_EYE_L = (int(overlay_w * 0.33), int(overlay_h * 0.36))
-    TEMPLATE_EYE_R = (int(overlay_w * 0.67), int(overlay_h * 0.36))
-    TEMPLATE_NOSE  = (int(overlay_w * 0.50), int(overlay_h * 0.46))
-    src_tri = np.float32([TEMPLATE_EYE_L, TEMPLATE_EYE_R, TEMPLATE_NOSE])
+    # Чтобы поднять маску, УВЕЛИЧИВАЕМ Y-координату в шаблоне.
+    TEMPLATE_EYE_L = (int(overlay_w * 0.33), int(overlay_h * 0.45))
+    TEMPLATE_EYE_R = (int(overlay_w * 0.67), int(overlay_h * 0.45))
 
-    # Вычисление матрицы аффинного преобразования
-    affine_matrix = cv2.getAffineTransform(src_tri, dst_tri)
+    # Используем только точки глаз для оценки трансформации
+    src_pts = np.float32([TEMPLATE_EYE_L, TEMPLATE_EYE_R])
+    dst_pts = np.float32([dst_tri[0], dst_tri[1]])  # eye_l, eye_r из dst_tri
 
-    # Применение трансформации к PNG. Размер (w, h) кадра важен,
-    # чтобы трансформированное изображение оказалось в правильной позиции на холсте.
-    warped_overlay = cv2.warpAffine(overlay_rgba, affine_matrix, (w, h))
+    # 1. Вычисляем базовую матрицу преобразования
+    affine_matrix, _ = cv2.estimateAffinePartial2D(src_pts, dst_pts)
+
+    if affine_matrix is None:
+        return frame
+
+    # 2. Применяем дополнительное масштабирование поверх существующей трансформации
+    scale_factor = 1.15  # Увеличить на 15%
+
+    # Находим центр масштабирования (центр глаз в кадре)
+    dst_center = np.mean(dst_pts, axis=0)
+
+    # Копируем матрицу, чтобы не изменять оригинал
+    scaled_affine_matrix = affine_matrix.copy()
+
+    # Масштабируем часть матрицы, отвечающую за поворот/масштаб
+    scaled_affine_matrix[:, :2] = affine_matrix[:, :2] * scale_factor
+
+    # Корректируем сдвиг по формуле: t_new = s*t + (1-s)*C
+    scaled_affine_matrix[:, 2] = (
+        affine_matrix[:, 2] * scale_factor + (1 - scale_factor) * dst_center
+    )
+
+    # Применение итоговой СКОРРЕКТИРОВАННОЙ трансформации
+    warped_overlay = cv2.warpAffine(overlay_rgba, scaled_affine_matrix, (w, h))
 
     # Разделение наложенного изображения на RGB и альфа-канал
     overlay_rgb = warped_overlay[..., :3]
@@ -106,18 +137,29 @@ def overlay_png_affine(frame, overlay_rgba, dst_tri):
 
 # --- Основная функция ---
 
+
 def main():
-    parser = argparse.ArgumentParser(description="Video processing with background segmentation and face mask overlay.")
+    parser = argparse.ArgumentParser(
+        description="Video processing with background segmentation and face mask overlay."
+    )
     parser.add_argument("input_video", help="Path to the input video file.")
     parser.add_argument("seg_model", help="Path to the YOLO segmentation model.")
     parser.add_argument("pose_model", help="Path to the YOLO pose model.")
-    parser.add_argument("mask_image", help="Path to the PNG mask image with alpha channel.")
-    parser.add_argument("bg_mode", choices=['blur', 'image'], help="Background processing mode: 'blur' or 'image'.")
-    parser.add_argument("--bg_image", help="Path to the background image (required for 'image' mode).")
+    parser.add_argument(
+        "mask_image", help="Path to the PNG mask image with alpha channel."
+    )
+    parser.add_argument(
+        "bg_mode",
+        choices=["blur", "image"],
+        help="Background processing mode: 'blur' or 'image'.",
+    )
+    parser.add_argument(
+        "--bg_image", help="Path to the background image (required for 'image' mode)."
+    )
 
     args = parser.parse_args()
 
-    if args.bg_mode == 'image' and not args.bg_image:
+    if args.bg_mode == "image" and not args.bg_image:
         print("Error: Background image path is required for 'image' mode.")
         return
 
@@ -142,14 +184,16 @@ def main():
         mask_rgba = cv2.imread(args.mask_image, cv2.IMREAD_UNCHANGED)
         if mask_rgba.shape[2] != 4:
             raise ValueError("Mask image must have an alpha channel.")
-        print(f"Mask image '{args.mask_image}' loaded ({mask_rgba.shape[1]}x{mask_rgba.shape[0]}).")
+        print(
+            f"Mask image '{args.mask_image}' loaded ({mask_rgba.shape[1]}x{mask_rgba.shape[0]})."
+        )
     except Exception as e:
         print(f"Error loading mask image: {e}")
         return
 
     # Загрузка фонового изображения, если нужно
     bg_image_resized = None
-    if args.bg_mode == 'image':
+    if args.bg_mode == "image":
         try:
             bg_image = cv2.imread(args.bg_image)
             print(f"Background image '{args.bg_image}' loaded.")
@@ -169,13 +213,13 @@ def main():
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
     # Изменяем размер фонового изображения под кадр
-    if bg_image_resized is None and args.bg_mode == 'image':
+    if bg_image_resized is None and args.bg_mode == "image":
         bg_image_resized = cv2.resize(bg_image, (w, h))
 
     # Настройка выходного видео
     output_video_path = "output_temp.mp4"
     final_output_path = "output_masked.mp4"
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     out = cv2.VideoWriter(output_video_path, fourcc, fps, (w, h))
 
     print(f"Input video: {w}x{h} @ {fps:.2f} FPS, {total_frames} frames.")
@@ -201,12 +245,17 @@ def main():
             # Объединяем все маски людей в одну
             combined_mask = torch.any(seg_results[0].masks.data, dim=0).float()
             seg_mask_np = combined_mask.cpu().numpy()
-            final_frame = process_background(frame, seg_mask_np, args.bg_mode, bg_image_resized)
+            final_frame = process_background(
+                frame, seg_mask_np, args.bg_mode, bg_image_resized
+            )
 
         # --- Обнаружение и наложение маски на лицо ---
         pose_results = model_pose(frame, verbose=False)
 
-        if pose_results[0].keypoints is not None and len(pose_results[0].keypoints.xy) > 0:
+        if (
+            pose_results[0].keypoints is not None
+            and len(pose_results[0].keypoints.xy) > 0
+        ):
             # Берем первого обнаруженного человека
             keypoints = pose_results[0].keypoints.xy[0]
 
@@ -218,7 +267,7 @@ def main():
 
             # Проверка на "зеркальность" (когда левый глаз правее правого)
             if eye_l[0] > eye_r[0]:
-                eye_l, eye_r = eye_r, eye_l # Меняем местами
+                eye_l, eye_r = eye_r, eye_l  # Меняем местами
 
             # Проверка, что точки валидны (не нулевые)
             if np.all(nose > 0) and np.all(eye_l > 0) and np.all(eye_r > 0):
@@ -227,7 +276,9 @@ def main():
                 dst_tri_smoothed = landmarks_smoother(dst_tri_raw)
 
                 # Наложение
-                final_frame = overlay_png_affine(final_frame, mask_rgba, dst_tri_smoothed)
+                final_frame = overlay_png_affine(
+                    final_frame, mask_rgba, dst_tri_smoothed
+                )
 
         out.write(final_frame)
         frame_count += 1
@@ -236,7 +287,9 @@ def main():
         if frame_count % 20 == 0:
             elapsed = time.time() - loop_start_time
             current_fps = 1.0 / elapsed if elapsed > 0 else 0
-            print(f"Processed frame {frame_count}/{total_frames} ({current_fps:.2f} FPS)")
+            print(
+                f"Processed frame {frame_count}/{total_frames} ({current_fps:.2f} FPS)"
+            )
 
     # --- 3. Постобработка ---
     print("Video processing finished. Releasing resources...")
@@ -246,15 +299,28 @@ def main():
     # Слияние аудио с помощью ffmpeg
     print("Merging audio from original video...")
     ffmpeg_command = [
-        'ffmpeg', '-y',
-        '-i', output_video_path,
-        '-i', args.input_video,
-        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23',
-        '-c:a', 'aac', '-b:a', '192k',
-        '-map', '0:v:0',
-        '-map', '1:a:0?', # '?' делает поток опциональным
-        '-shortest',
-        final_output_path
+        "ffmpeg",
+        "-y",
+        "-i",
+        output_video_path,
+        "-i",
+        args.input_video,
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "23",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0?",  # '?' делает поток опциональным
+        "-shortest",
+        final_output_path,
     ]
 
     try:
@@ -265,7 +331,7 @@ def main():
     except subprocess.CalledProcessError as e:
         print("\n--- FFMPEG ERROR ---")
         print(f"FFmpeg command failed with exit code {e.returncode}")
-        print("Command:", ' '.join(e.cmd))
+        print("Command:", " ".join(e.cmd))
         print("Stdout:", e.stdout)
         print("Stderr:", e.stderr)
         print("--------------------\n")
@@ -273,7 +339,6 @@ def main():
     except FileNotFoundError:
         print("Error: ffmpeg is not installed or not in your PATH.")
         print(f"Temporary video without audio is available at: {output_video_path}")
-
 
     # --- 4. Финальная информация ---
     end_time = time.time()
