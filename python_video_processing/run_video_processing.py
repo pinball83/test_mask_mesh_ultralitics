@@ -89,8 +89,8 @@ def overlay_png_affine(frame, overlay_rgba, dst_tri):
     overlay_h, overlay_w = overlay_rgba.shape[:2]
 
     # Чтобы поднять маску, УВЕЛИЧИВАЕМ Y-координату в шаблоне.
-    TEMPLATE_EYE_L = (int(overlay_w * 0.33), int(overlay_h * 0.45))
-    TEMPLATE_EYE_R = (int(overlay_w * 0.67), int(overlay_h * 0.45))
+    TEMPLATE_EYE_L = (int(overlay_w * 0.33), int(overlay_h * 0.40))
+    TEMPLATE_EYE_R = (int(overlay_w * 0.67), int(overlay_h * 0.40))
 
     # Используем только точки глаз для оценки трансформации
     src_pts = np.float32([TEMPLATE_EYE_L, TEMPLATE_EYE_R])
@@ -103,7 +103,7 @@ def overlay_png_affine(frame, overlay_rgba, dst_tri):
         return frame
 
     # 2. Применяем дополнительное масштабирование поверх существующей трансформации
-    scale_factor = 1.15  # Увеличить на 15%
+    scale_factor = 1.5  # Увеличить на 30%
 
     # Находим центр масштабирования (центр глаз в кадре)
     dst_center = np.mean(dst_pts, axis=0)
