@@ -45,5 +45,10 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<!-- Privacy usage descriptions -->
+	<key>NSCameraUsageDescription</key>
+	<string>This app uses the camera for live background segmentation and face mask overlays.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>This app uses the microphone to capture audio during live camera sessions.</string>
 </dict>
 </plist>
