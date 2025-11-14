@@ -1,5 +1,0 @@
-ultralytics
-numpy
-opencv-python-headless
-torch
-torchvision
