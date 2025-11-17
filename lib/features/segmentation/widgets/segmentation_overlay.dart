@@ -11,7 +11,7 @@ class SegmentationOverlay extends StatefulWidget {
     required this.flipHorizontal,
     required this.flipVertical,
     this.backgroundAsset = 'assets/images/bg_image.jpg',
-    this.maskSmoothing = 2.0,
+    this.maskSmoothing = 0.0,
   });
 
   final List<YOLOResult> detections;
@@ -145,8 +145,9 @@ class _SegmentationMaskPainter extends CustomPainter {
       dy: dy,
     );
 
-    final backgroundPaint = Paint()
-      ..color = Colors.black.withValues(alpha: 0.5);
+    // Draw the replacement background on an offscreen layer, then punch out
+    // the subject area to reveal the camera feed underneath.
+    final backgroundPaint = Paint()..color = Colors.black; // fully opaque fallback
     canvas.saveLayer(Offset.zero & size, Paint());
     if (backgroundImage != null) {
       paintImage(
@@ -159,18 +160,16 @@ class _SegmentationMaskPainter extends CustomPainter {
       canvas.drawRect(Offset.zero & size, backgroundPaint);
     }
 
-    // Create a separate layer for mask with optional blur smoothing
-    final maskLayerRect = Rect.fromLTWH(0, 0, size.width, size.height);
-    final maskLayerPaint = Paint();
+    // Use dstOut to erase the background where the subject mask is present.
+    final erasePaint = Paint()
+      ..blendMode = BlendMode.dstOut
+      ..isAntiAlias = true;
     if (maskSmoothing > 0) {
-      maskLayerPaint.imageFilter = ui.ImageFilter.blur(
-        sigmaX: maskSmoothing,
-        sigmaY: maskSmoothing,
+      erasePaint.maskFilter = ui.MaskFilter.blur(
+        ui.BlurStyle.normal,
+        maskSmoothing,
       );
     }
-    canvas.saveLayer(maskLayerRect, maskLayerPaint);
-
-    final clearPaint = Paint()..blendMode = BlendMode.clear;
 
     for (final detection in detections) {
       final mask = detection.mask;
@@ -227,14 +226,13 @@ class _SegmentationMaskPainter extends CustomPainter {
 
           canvas.drawRect(
             Rect.fromLTWH(left, top, cellWidth, cellHeight),
-            clearPaint,
+            erasePaint,
           );
         }
       }
     }
 
-    canvas.restore(); // Restore mask layer (applies blur if enabled)
-
+    // Composite the punched-out background over the camera feed.
     canvas.restore();
     canvas.restore();
   }
@@ -245,6 +243,7 @@ class _SegmentationMaskPainter extends CustomPainter {
         oldDelegate.maskThreshold != maskThreshold ||
         oldDelegate.flipHorizontal != flipHorizontal ||
         oldDelegate.flipVertical != flipVertical ||
+        oldDelegate.backgroundImage != backgroundImage ||
         oldDelegate.maskSmoothing != maskSmoothing;
   }
 
