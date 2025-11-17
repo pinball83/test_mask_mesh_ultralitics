@@ -136,6 +136,18 @@ class _SegmentationMaskPainter extends CustomPainter {
     final dx = (size.width - scaledWidth) / 2.0;
     final dy = (size.height - scaledHeight) / 2.0;
 
+    // Auto-detect horizontal/vertical mirroring to match YOLO outputs.
+    final (bool autoFlipH, bool autoFlipV) = _detectAutoMirror(
+      size: size,
+      srcW: sourceWidth,
+      srcH: sourceHeight,
+      scale: scale,
+      dx: dx,
+      dy: dy,
+    );
+    final effectiveFlipH = flipHorizontal ^ autoFlipH;
+    final effectiveFlipV = flipVertical ^ autoFlipV;
+
     _logTransformOnce(
       view: size,
       sourceW: sourceWidth,
@@ -143,6 +155,8 @@ class _SegmentationMaskPainter extends CustomPainter {
       scale: scale,
       dx: dx,
       dy: dy,
+      effFlipH: effectiveFlipH,
+      effFlipV: effectiveFlipV,
     );
 
     // Draw the replacement background on an offscreen layer, then punch out
@@ -214,14 +228,14 @@ class _SegmentationMaskPainter extends CustomPainter {
 
       for (var y = startY; y < endY; y++) {
         final row = mask[y];
-        final mappedY = flipVertical ? (maskHeight - 1 - y) : y;
+        final mappedY = effectiveFlipV ? (maskHeight - 1 - y) : y;
         final top = dy + mappedY * cellHeight;
 
         for (var x = startX; x < endX; x++) {
           final value = row[x];
           if (value < maskThreshold) continue;
 
-          final mappedX = flipHorizontal ? (maskWidth - 1 - x) : x;
+          final mappedX = effectiveFlipH ? (maskWidth - 1 - x) : x;
           final left = dx + mappedX * cellWidth;
 
           canvas.drawRect(
@@ -296,6 +310,109 @@ class _SegmentationMaskPainter extends CustomPainter {
     return value;
   }
 
+  YOLOResult? _pickPrimaryMask(List<YOLOResult> list) {
+    YOLOResult? best;
+    var bestArea = -1.0;
+    for (final d in list) {
+      final mask = d.mask;
+      final box = d.boundingBox;
+      if (mask == null || mask.isEmpty || box.isEmpty) continue;
+      final area = (box.width * box.height).abs();
+      if (area > bestArea) {
+        bestArea = area;
+        best = d;
+      }
+    }
+    return best;
+  }
+
+  (bool, bool) _detectAutoMirror({
+    required Size size,
+    required double srcW,
+    required double srcH,
+    required double scale,
+    required double dx,
+    required double dy,
+  }) {
+    // Prefer the primary segmentation detection (largest masked area)
+    YOLOResult? ref = _pickPrimaryMask(detections);
+    ref ??= () {
+      for (final d in detections) {
+        if (!d.normalizedBox.isEmpty && !d.boundingBox.isEmpty) {
+          return d;
+        }
+      }
+      return null;
+    }();
+    if (ref == null) return (false, false);
+
+    Rect _mapNormToView(Rect n) {
+      final l = dx + (n.left.clamp(0.0, 1.0) * srcW) * scale;
+      final t = dy + (n.top.clamp(0.0, 1.0) * srcH) * scale;
+      final r = dx + (n.right.clamp(0.0, 1.0) * srcW) * scale;
+      final b = dy + (n.bottom.clamp(0.0, 1.0) * srcH) * scale;
+      final left = l < r ? l : r;
+      final right = l < r ? r : l;
+      final top = t < b ? t : b;
+      final bottom = t < b ? b : t;
+      return Rect.fromLTRB(left, top, right, bottom);
+    }
+
+    Rect _mirrorH(Rect r) => Rect.fromLTRB(
+          size.width - r.right,
+          r.top,
+          size.width - r.left,
+          r.bottom,
+        );
+    Rect _mirrorV(Rect r) => Rect.fromLTRB(
+          r.left,
+          size.height - r.bottom,
+          r.right,
+          size.height - r.top,
+        );
+
+    double _l1(Rect a, Rect b) {
+      return (a.left - b.left).abs() +
+          (a.top - b.top).abs() +
+          (a.right - b.right).abs() +
+          (a.bottom - b.bottom).abs();
+    }
+
+    final predicted = _mapNormToView(ref.normalizedBox);
+    final actual = ref.boundingBox;
+
+    final h = _mirrorH(predicted);
+    final v = _mirrorV(predicted);
+    final hv = _mirrorV(h);
+
+    final dBase = _l1(predicted, actual);
+    final dH = _l1(h, actual);
+    final dV = _l1(v, actual);
+    final dHV = _l1(hv, actual);
+
+    // Choose the transform with minimal error; add a small bias to reduce flicker.
+    double min = dBase;
+    var flipH = false;
+    var flipV = false;
+    if (dH + 0.5 < min) {
+      min = dH;
+      flipH = true;
+      flipV = false;
+    }
+    if (dV + 0.5 < min) {
+      min = dV;
+      flipH = false;
+      flipV = true;
+    }
+    if (dHV + 0.5 < min) {
+      min = dHV;
+      flipH = true;
+      flipV = true;
+    }
+
+    return (flipH, flipV);
+  }
+
   // Lightweight throttled logger for transform parameters – useful to compare
   // with pose keypoint mapping.
   static DateTime? _lastTransformLog;
@@ -306,6 +423,8 @@ class _SegmentationMaskPainter extends CustomPainter {
     required double scale,
     required double dx,
     required double dy,
+    required bool effFlipH,
+    required bool effFlipV,
   }) {
     final now = DateTime.now();
     if (_lastTransformLog != null &&
@@ -317,7 +436,7 @@ class _SegmentationMaskPainter extends CustomPainter {
       'SEGMENTATION DEBUG — view=${view.width.toStringAsFixed(0)}x${view.height.toStringAsFixed(0)} '
       'src=${sourceW.toStringAsFixed(1)}x${sourceH.toStringAsFixed(1)} '
       'scale=${scale.toStringAsFixed(4)} dx=${dx.toStringAsFixed(1)} dy=${dy.toStringAsFixed(1)} '
-      'flip(h:$flipHorizontal v:$flipVertical)',
+      'flip(h:$flipHorizontal v:$flipVertical) eff(h:$effFlipH v:$effFlipV)',
     );
   }
 }

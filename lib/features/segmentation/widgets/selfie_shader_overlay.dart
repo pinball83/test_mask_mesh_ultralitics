@@ -200,7 +200,7 @@ class _PoseOverlayPainter extends CustomPainter {
   // Keypoint position correction (in view space, pixels)
   // This correction compensates for offset between detected keypoints and actual
   // facial feature positions. Set to Offset.zero if keypoints are already accurate.
-  static const Offset _keypointCorrectionView = Offset(30.0, 40.0);
+  static const Offset _keypointCorrectionView = Offset.zero;
 
   // Mustache positioning correction (in view space, scaled)
   // Small adjustment to center mustache mask on nose. Set to 0.0 if not needed.
@@ -270,22 +270,64 @@ class _PoseOverlayPainter extends CustomPainter {
             ? transform.viewRectToImage(maskDetection.boundingBox)
             : null);
 
+    final (bool autoFlipH, bool autoFlipV) = _detectAutoMirror(
+      size: size,
+      transform: transform,
+      reference: maskDetection ?? poseDetection,
+    );
+    final effectiveFlipH = flipHorizontal ^ autoFlipH;
+    final effectiveFlipV = flipVertical ^ autoFlipV;
+
     final viewPoints = _ViewPoints(
-      faceRect: _mapRectToCanvas(faceRectImage, transform, size),
-      nose: _mapPointToCanvas(landmarks?.nose, transform, size),
-      leftEye: _mapPointToCanvas(landmarks?.leftEye, transform, size),
-      rightEye: _mapPointToCanvas(landmarks?.rightEye, transform, size),
+      faceRect: _mapRectToCanvas(
+        faceRectImage,
+        transform,
+        size,
+        effectiveFlipH,
+        effectiveFlipV,
+      ),
+      nose: _mapPointToCanvas(
+        landmarks?.nose,
+        transform,
+        size,
+        effectiveFlipH,
+        effectiveFlipV,
+      ),
+      leftEye: _mapPointToCanvas(
+        landmarks?.leftEye,
+        transform,
+        size,
+        effectiveFlipH,
+        effectiveFlipV,
+      ),
+      rightEye: _mapPointToCanvas(
+        landmarks?.rightEye,
+        transform,
+        size,
+        effectiveFlipH,
+        effectiveFlipV,
+      ),
       noseBridgeStart: _mapPointToCanvas(
         landmarks?.noseBridgeStart,
         transform,
         size,
+        effectiveFlipH,
+        effectiveFlipV,
       ),
       noseBridgeEnd: _mapPointToCanvas(
         landmarks?.noseBridgeEnd ?? landmarks?.nose,
         transform,
         size,
+        effectiveFlipH,
+        effectiveFlipV,
       ),
-      upperLip: _mapPointToCanvas(landmarks?.upperLipCenter, transform, size),
+      upperLip: _mapPointToCanvas(
+        landmarks?.upperLipCenter,
+        transform,
+        size,
+        effectiveFlipH,
+        effectiveFlipV,
+      ),
     );
 
     if (debugPose) {
@@ -295,6 +337,8 @@ class _PoseOverlayPainter extends CustomPainter {
         pose: poseDetection,
         mask: maskDetection,
         viewPoints: viewPoints,
+        effectiveFlipH: effectiveFlipH,
+        effectiveFlipV: effectiveFlipV,
       );
     }
 
@@ -533,6 +577,8 @@ class _PoseOverlayPainter extends CustomPainter {
     required YOLOResult? pose,
     required YOLOResult? mask,
     required _ViewPoints viewPoints,
+    required bool effectiveFlipH,
+    required bool effectiveFlipV,
   }) {
     final now = DateTime.now();
     if (_lastLog != null &&
@@ -575,16 +621,33 @@ class _PoseOverlayPainter extends CustomPainter {
               'T${mask.boundingBox.top.toStringAsFixed(1)} '
               'W${mask.boundingBox.width.toStringAsFixed(1)} '
               'H${mask.boundingBox.height.toStringAsFixed(1)}',
-        if (flipHorizontal || flipVertical)
-          'flips: h=$flipHorizontal v=$flipVertical',
+        'flips: h=$flipHorizontal v=$flipVertical eff(h:$effectiveFlipH v:$effectiveFlipV)',
       ].join(' | '),
     );
   }
 
-  Rect? _mapRectToCanvas(Rect? rect, _LetterboxTransform transform, Size size) {
+  Rect? _mapRectToCanvas(
+    Rect? rect,
+    _LetterboxTransform transform,
+    Size size,
+    bool effectiveFlipH,
+    bool effectiveFlipV,
+  ) {
     if (rect == null || rect.isEmpty) return null;
-    final topLeft = _mapPointToCanvas(rect.topLeft, transform, size);
-    final bottomRight = _mapPointToCanvas(rect.bottomRight, transform, size);
+    final topLeft = _mapPointToCanvas(
+      rect.topLeft,
+      transform,
+      size,
+      effectiveFlipH,
+      effectiveFlipV,
+    );
+    final bottomRight = _mapPointToCanvas(
+      rect.bottomRight,
+      transform,
+      size,
+      effectiveFlipH,
+      effectiveFlipV,
+    );
     if (topLeft == null || bottomRight == null) return null;
     final left = math.min(topLeft.dx, bottomRight.dx);
     final right = math.max(topLeft.dx, bottomRight.dx);
@@ -619,12 +682,14 @@ class _PoseOverlayPainter extends CustomPainter {
     Offset? imagePoint,
     _LetterboxTransform transform,
     Size size,
+    bool effectiveFlipH,
+    bool effectiveFlipV,
   ) {
     if (imagePoint == null) return null;
     // Apply flips in IMAGE space to match mask overlay semantics, then map.
     final flipped = Offset(
-      flipHorizontal ? (transform.srcWidth - imagePoint.dx) : imagePoint.dx,
-      flipVertical ? (transform.srcHeight - imagePoint.dy) : imagePoint.dy,
+      effectiveFlipH ? (transform.srcWidth - imagePoint.dx) : imagePoint.dx,
+      effectiveFlipV ? (transform.srcHeight - imagePoint.dy) : imagePoint.dy,
     );
     final viewPoint = transform.imageToView(flipped);
     if (!viewPoint.dx.isFinite || !viewPoint.dy.isFinite) return null;
@@ -711,6 +776,80 @@ class _PoseOverlayPainter extends CustomPainter {
       rightEye: rightEye,
       nose: nose,
     );
+  }
+
+  (bool, bool) _detectAutoMirror({
+    required Size size,
+    required _LetterboxTransform transform,
+    required YOLOResult? reference,
+  }) {
+    final ref = reference;
+    if (ref == null) return (false, false);
+    if (ref.normalizedBox.isEmpty || ref.boundingBox.isEmpty) return (false, false);
+
+    Rect _mapNormToView(Rect n) {
+      final l = transform.dx + (n.left.clamp(0.0, 1.0) * transform.srcWidth) * transform.scale;
+      final t = transform.dy + (n.top.clamp(0.0, 1.0) * transform.srcHeight) * transform.scale;
+      final r = transform.dx + (n.right.clamp(0.0, 1.0) * transform.srcWidth) * transform.scale;
+      final b = transform.dy + (n.bottom.clamp(0.0, 1.0) * transform.srcHeight) * transform.scale;
+      final left = l < r ? l : r;
+      final right = l < r ? r : l;
+      final top = t < b ? t : b;
+      final bottom = t < b ? b : t;
+      return Rect.fromLTRB(left, top, right, bottom);
+    }
+
+    Rect _mirrorH(Rect r) => Rect.fromLTRB(
+          size.width - r.right,
+          r.top,
+          size.width - r.left,
+          r.bottom,
+        );
+    Rect _mirrorV(Rect r) => Rect.fromLTRB(
+          r.left,
+          size.height - r.bottom,
+          r.right,
+          size.height - r.top,
+        );
+
+    double _l1(Rect a, Rect b) {
+      return (a.left - b.left).abs() +
+          (a.top - b.top).abs() +
+          (a.right - b.right).abs() +
+          (a.bottom - b.bottom).abs();
+    }
+
+    final predicted = _mapNormToView(ref.normalizedBox);
+    final actual = ref.boundingBox;
+
+    final h = _mirrorH(predicted);
+    final v = _mirrorV(predicted);
+    final hv = _mirrorV(h);
+
+    final dBase = _l1(predicted, actual);
+    final dH = _l1(h, actual);
+    final dV = _l1(v, actual);
+    final dHV = _l1(hv, actual);
+
+    double min = dBase;
+    var flipH = false;
+    var flipV = false;
+    if (dH + 0.5 < min) {
+      min = dH;
+      flipH = true;
+      flipV = false;
+    }
+    if (dV + 0.5 < min) {
+      min = dV;
+      flipH = false;
+      flipV = true;
+    }
+    if (dHV + 0.5 < min) {
+      min = dHV;
+      flipH = true;
+      flipV = true;
+    }
+    return (flipH, flipV);
   }
 
   Offset? _findUpperLipCenter({
