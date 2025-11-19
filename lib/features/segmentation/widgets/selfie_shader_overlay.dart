@@ -4,6 +4,8 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:ultralytics_yolo/models/yolo_result.dart';
 
+import '../utils/detection_view_geometry.dart';
+
 /// Pose-driven overlay that draws facial debug markers and a mustache sprite.
 /// The name is kept for backwards compatibility with the previous shader-based implementation.
 class SelfieShaderOverlay extends StatefulWidget {
@@ -37,14 +39,10 @@ class _SelfieShaderOverlayState extends State<SelfieShaderOverlay> {
   ImageStream? _mustacheStream;
   ImageStreamListener? _mustacheListener;
 
-  double? _srcW;
-  double? _srcH;
-
   @override
   void initState() {
     super.initState();
     _resolveMustache();
-    _updateSourceSize();
   }
 
   @override
@@ -52,9 +50,6 @@ class _SelfieShaderOverlayState extends State<SelfieShaderOverlay> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.mustacheAsset != widget.mustacheAsset) {
       _resolveMustache();
-    }
-    if (!identical(oldWidget.detections, widget.detections)) {
-      _updateSourceSize();
     }
   }
 
@@ -85,56 +80,6 @@ class _SelfieShaderOverlayState extends State<SelfieShaderOverlay> {
     _mustacheListener = null;
   }
 
-  void _updateSourceSize() {
-    setState(() {
-      final size = _estimateSourceSize(widget.detections);
-      _srcW = size?.width;
-      _srcH = size?.height;
-    });
-  }
-
-  Size? _estimateSourceSize(List<YOLOResult> list) {
-    // Prefer segmentation detections (with non-empty mask) for estimating
-    // original source size, since their boxes are the reference used by
-    // the background overlay.
-    final ordered = [
-      ...list.where((d) => (d.mask?.isNotEmpty ?? false)),
-      ...list.where((d) => !(d.mask?.isNotEmpty ?? false)),
-    ];
-
-    double? width;
-    double? height;
-
-    for (final d in ordered) {
-      final nb = d.normalizedBox;
-      final bb = d.boundingBox;
-
-      if (width == null && nb.width > 0 && bb.width > 0 && nb.width.isFinite) {
-        final candidate = bb.width / nb.width;
-        if (candidate.isFinite && candidate > 0) {
-          width = candidate;
-        }
-      }
-
-      if (height == null &&
-          nb.height > 0 &&
-          bb.height > 0 &&
-          nb.height.isFinite) {
-        final candidate = bb.height / nb.height;
-        if (candidate.isFinite && candidate > 0) {
-          height = candidate;
-        }
-      }
-
-      if (width != null && height != null) break;
-    }
-
-    if (width != null && height != null) {
-      return Size(width, height);
-    }
-    return null;
-  }
-
   @override
   Widget build(BuildContext context) {
     if (widget.poseDetections.isEmpty && !widget.debugPose) {
@@ -150,8 +95,6 @@ class _SelfieShaderOverlayState extends State<SelfieShaderOverlay> {
           mustacheAlpha: widget.mustacheAlpha.clamp(0.0, 1.0).toDouble(),
           flipHorizontal: widget.flipHorizontal,
           flipVertical: widget.flipVertical,
-          sourceWidth: _srcW,
-          sourceHeight: _srcH,
           debugPose: widget.debugPose,
           showMustache: widget.showMustache,
         ),
@@ -168,8 +111,6 @@ class _PoseOverlayPainter extends CustomPainter {
     required this.mustacheAlpha,
     required this.flipHorizontal,
     required this.flipVertical,
-    required this.sourceWidth,
-    required this.sourceHeight,
     required this.debugPose,
     required this.showMustache,
   });
@@ -180,8 +121,6 @@ class _PoseOverlayPainter extends CustomPainter {
   final double mustacheAlpha;
   final bool flipHorizontal;
   final bool flipVertical;
-  final double? sourceWidth;
-  final double? sourceHeight;
   final bool debugPose;
   final bool showMustache;
 
@@ -247,11 +186,11 @@ class _PoseOverlayPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     if (size.isEmpty) return;
 
-    final transform = _LetterboxTransform.fromView(
-      viewSize: size,
-      sourceWidth: sourceWidth,
-      sourceHeight: sourceHeight,
-    );
+    final geometrySource = detections.isNotEmpty ? detections : poseDetections;
+    final geometry = DetectionViewGeometry.fromDetections(geometrySource, size);
+    final transform = geometry != null
+        ? _LetterboxTransform.fromGeometry(geometry)
+        : _LetterboxTransform.identity(size);
 
     final poseDetection = _pickPrimaryPose(poseDetections, size);
     final maskDetection = _pickPrimaryMask(detections);
@@ -270,13 +209,11 @@ class _PoseOverlayPainter extends CustomPainter {
             ? transform.viewRectToImage(maskDetection.boundingBox)
             : null);
 
-    final (bool autoFlipH, bool autoFlipV) = _detectAutoMirror(
-      size: size,
-      transform: transform,
-      reference: maskDetection ?? poseDetection,
-    );
-    final effectiveFlipH = flipHorizontal ^ autoFlipH;
-    final effectiveFlipV = flipVertical ^ autoFlipV;
+    // Auto-mirroring detection is disabled for both iOS and Android to ensure
+    // consistent behavior controlled solely by the external flipHorizontal/flipVertical
+    // parameters. The heuristic was causing instability on Android when the head was bent.
+    final effectiveFlipH = flipHorizontal;
+    final effectiveFlipV = flipVertical;
 
     final viewPoints = _ViewPoints(
       faceRect: _mapRectToCanvas(
@@ -778,80 +715,6 @@ class _PoseOverlayPainter extends CustomPainter {
     );
   }
 
-  (bool, bool) _detectAutoMirror({
-    required Size size,
-    required _LetterboxTransform transform,
-    required YOLOResult? reference,
-  }) {
-    final ref = reference;
-    if (ref == null) return (false, false);
-    if (ref.normalizedBox.isEmpty || ref.boundingBox.isEmpty) return (false, false);
-
-    Rect _mapNormToView(Rect n) {
-      final l = transform.dx + (n.left.clamp(0.0, 1.0) * transform.srcWidth) * transform.scale;
-      final t = transform.dy + (n.top.clamp(0.0, 1.0) * transform.srcHeight) * transform.scale;
-      final r = transform.dx + (n.right.clamp(0.0, 1.0) * transform.srcWidth) * transform.scale;
-      final b = transform.dy + (n.bottom.clamp(0.0, 1.0) * transform.srcHeight) * transform.scale;
-      final left = l < r ? l : r;
-      final right = l < r ? r : l;
-      final top = t < b ? t : b;
-      final bottom = t < b ? b : t;
-      return Rect.fromLTRB(left, top, right, bottom);
-    }
-
-    Rect _mirrorH(Rect r) => Rect.fromLTRB(
-          size.width - r.right,
-          r.top,
-          size.width - r.left,
-          r.bottom,
-        );
-    Rect _mirrorV(Rect r) => Rect.fromLTRB(
-          r.left,
-          size.height - r.bottom,
-          r.right,
-          size.height - r.top,
-        );
-
-    double _l1(Rect a, Rect b) {
-      return (a.left - b.left).abs() +
-          (a.top - b.top).abs() +
-          (a.right - b.right).abs() +
-          (a.bottom - b.bottom).abs();
-    }
-
-    final predicted = _mapNormToView(ref.normalizedBox);
-    final actual = ref.boundingBox;
-
-    final h = _mirrorH(predicted);
-    final v = _mirrorV(predicted);
-    final hv = _mirrorV(h);
-
-    final dBase = _l1(predicted, actual);
-    final dH = _l1(h, actual);
-    final dV = _l1(v, actual);
-    final dHV = _l1(hv, actual);
-
-    double min = dBase;
-    var flipH = false;
-    var flipV = false;
-    if (dH + 0.5 < min) {
-      min = dH;
-      flipH = true;
-      flipV = false;
-    }
-    if (dV + 0.5 < min) {
-      min = dV;
-      flipH = false;
-      flipV = true;
-    }
-    if (dHV + 0.5 < min) {
-      min = dHV;
-      flipH = true;
-      flipV = true;
-    }
-    return (flipH, flipV);
-  }
-
   Offset? _findUpperLipCenter({
     required List<_PosePoint?> points,
     required Offset? noseBridgeEnd,
@@ -1005,8 +868,6 @@ class _PoseOverlayPainter extends CustomPainter {
         oldDelegate.poseDetections != poseDetections ||
         oldDelegate.flipHorizontal != flipHorizontal ||
         oldDelegate.flipVertical != flipVertical ||
-        oldDelegate.sourceWidth != sourceWidth ||
-        oldDelegate.sourceHeight != sourceHeight ||
         oldDelegate.debugPose != debugPose;
   }
 }
@@ -1043,28 +904,23 @@ class _LetterboxTransform {
     );
   }
 
-  static _LetterboxTransform fromView({
-    required Size viewSize,
-    required double? sourceWidth,
-    required double? sourceHeight,
-  }) {
-    final srcW = (sourceWidth ?? viewSize.width)
-        .clamp(1.0, double.infinity)
-        .toDouble();
-    final srcH = (sourceHeight ?? viewSize.height)
-        .clamp(1.0, double.infinity)
-        .toDouble();
-    final scale = math.max(viewSize.width / srcW, viewSize.height / srcH);
-    final scaledW = srcW * scale;
-    final scaledH = srcH * scale;
-    final dx = (viewSize.width - scaledW) / 2.0;
-    final dy = (viewSize.height - scaledH) / 2.0;
+  static _LetterboxTransform fromGeometry(DetectionViewGeometry geometry) {
     return _LetterboxTransform(
-      srcWidth: srcW,
-      srcHeight: srcH,
-      scale: scale,
-      dx: dx,
-      dy: dy,
+      srcWidth: geometry.sourceWidth,
+      srcHeight: geometry.sourceHeight,
+      scale: geometry.scale,
+      dx: geometry.dx,
+      dy: geometry.dy,
+    );
+  }
+
+  static _LetterboxTransform identity(Size viewSize) {
+    return _LetterboxTransform(
+      srcWidth: viewSize.width.clamp(1.0, double.infinity),
+      srcHeight: viewSize.height.clamp(1.0, double.infinity),
+      scale: 1.0,
+      dx: 0.0,
+      dy: 0.0,
     );
   }
 }

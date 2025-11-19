@@ -3,6 +3,8 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:ultralytics_yolo/models/yolo_result.dart';
 
+import '../utils/detection_view_geometry.dart';
+
 class SegmentationOverlay extends StatefulWidget {
   const SegmentationOverlay({
     super.key,
@@ -119,34 +121,26 @@ class _SegmentationMaskPainter extends CustomPainter {
     canvas.save();
     canvas.clipRect(Offset.zero & size);
 
-    final sourceSize = _estimateSourceSize();
-    final sourceWidth = sourceSize?.width ?? size.width;
-    final sourceHeight = sourceSize?.height ?? size.height;
-
-    if (sourceWidth <= 0 || sourceHeight <= 0) {
+    final geometry = DetectionViewGeometry.fromDetections(detections, size);
+    if (geometry == null) {
       canvas.restore();
       return;
     }
 
-    final scaleX = size.width / sourceWidth;
-    final scaleY = size.height / sourceHeight;
-    final scale = scaleX > scaleY ? scaleX : scaleY;
+    final sourceWidth = geometry.sourceWidth;
+    final sourceHeight = geometry.sourceHeight;
+    final scale = geometry.scale;
     final scaledWidth = sourceWidth * scale;
     final scaledHeight = sourceHeight * scale;
-    final dx = (size.width - scaledWidth) / 2.0;
-    final dy = (size.height - scaledHeight) / 2.0;
+    final dx = geometry.dx;
+    final dy = geometry.dy;
 
-    // Auto-detect horizontal/vertical mirroring to match YOLO outputs.
-    final (bool autoFlipH, bool autoFlipV) = _detectAutoMirror(
-      size: size,
-      srcW: sourceWidth,
-      srcH: sourceHeight,
-      scale: scale,
-      dx: dx,
-      dy: dy,
-    );
-    final effectiveFlipH = flipHorizontal ^ autoFlipH;
-    final effectiveFlipV = flipVertical ^ autoFlipV;
+    // Auto-mirroring detection is disabled for both iOS and Android to ensure
+    // consistent behavior controlled solely by the external flipHorizontal/flipVertical
+    // parameters. The heuristic was causing instability on Android when the head was bent.
+    final effectiveFlipH = flipHorizontal;
+    const maskSourceIsUpsideDown = true;
+    final effectiveFlipV = maskSourceIsUpsideDown ^ flipVertical;
 
     _logTransformOnce(
       view: size,
@@ -155,13 +149,12 @@ class _SegmentationMaskPainter extends CustomPainter {
       scale: scale,
       dx: dx,
       dy: dy,
-      effFlipH: effectiveFlipH,
-      effFlipV: effectiveFlipV,
     );
 
     // Draw the replacement background on an offscreen layer, then punch out
     // the subject area to reveal the camera feed underneath.
-    final backgroundPaint = Paint()..color = Colors.black; // fully opaque fallback
+    final backgroundPaint = Paint()
+      ..color = Colors.black; // fully opaque fallback
     canvas.saveLayer(Offset.zero & size, Paint());
     if (backgroundImage != null) {
       paintImage(
@@ -261,156 +254,10 @@ class _SegmentationMaskPainter extends CustomPainter {
         oldDelegate.maskSmoothing != maskSmoothing;
   }
 
-  Size? _estimateSourceSize() {
-    double? width;
-    double? height;
-
-    for (final detection in detections) {
-      final normalized = detection.normalizedBox;
-      final bounds = detection.boundingBox;
-
-      final normalizedWidth = normalized.width;
-      final normalizedHeight = normalized.height;
-
-      if (width == null &&
-          normalizedWidth > 0 &&
-          bounds.width > 0 &&
-          normalizedWidth.isFinite) {
-        final candidate = bounds.width / normalizedWidth;
-        if (candidate.isFinite && candidate > 0) {
-          width = candidate;
-        }
-      }
-
-      if (height == null &&
-          normalizedHeight > 0 &&
-          bounds.height > 0 &&
-          normalizedHeight.isFinite) {
-        final candidate = bounds.height / normalizedHeight;
-        if (candidate.isFinite && candidate > 0) {
-          height = candidate;
-        }
-      }
-
-      if (width != null && height != null) {
-        break;
-      }
-    }
-
-    if (width != null && height != null) {
-      return Size(width, height);
-    }
-
-    return null;
-  }
-
   int _clampIndex(int value, int min, int max) {
     if (value < min) return min;
     if (value > max) return max;
     return value;
-  }
-
-  YOLOResult? _pickPrimaryMask(List<YOLOResult> list) {
-    YOLOResult? best;
-    var bestArea = -1.0;
-    for (final d in list) {
-      final mask = d.mask;
-      final box = d.boundingBox;
-      if (mask == null || mask.isEmpty || box.isEmpty) continue;
-      final area = (box.width * box.height).abs();
-      if (area > bestArea) {
-        bestArea = area;
-        best = d;
-      }
-    }
-    return best;
-  }
-
-  (bool, bool) _detectAutoMirror({
-    required Size size,
-    required double srcW,
-    required double srcH,
-    required double scale,
-    required double dx,
-    required double dy,
-  }) {
-    // Prefer the primary segmentation detection (largest masked area)
-    YOLOResult? ref = _pickPrimaryMask(detections);
-    ref ??= () {
-      for (final d in detections) {
-        if (!d.normalizedBox.isEmpty && !d.boundingBox.isEmpty) {
-          return d;
-        }
-      }
-      return null;
-    }();
-    if (ref == null) return (false, false);
-
-    Rect _mapNormToView(Rect n) {
-      final l = dx + (n.left.clamp(0.0, 1.0) * srcW) * scale;
-      final t = dy + (n.top.clamp(0.0, 1.0) * srcH) * scale;
-      final r = dx + (n.right.clamp(0.0, 1.0) * srcW) * scale;
-      final b = dy + (n.bottom.clamp(0.0, 1.0) * srcH) * scale;
-      final left = l < r ? l : r;
-      final right = l < r ? r : l;
-      final top = t < b ? t : b;
-      final bottom = t < b ? b : t;
-      return Rect.fromLTRB(left, top, right, bottom);
-    }
-
-    Rect _mirrorH(Rect r) => Rect.fromLTRB(
-          size.width - r.right,
-          r.top,
-          size.width - r.left,
-          r.bottom,
-        );
-    Rect _mirrorV(Rect r) => Rect.fromLTRB(
-          r.left,
-          size.height - r.bottom,
-          r.right,
-          size.height - r.top,
-        );
-
-    double _l1(Rect a, Rect b) {
-      return (a.left - b.left).abs() +
-          (a.top - b.top).abs() +
-          (a.right - b.right).abs() +
-          (a.bottom - b.bottom).abs();
-    }
-
-    final predicted = _mapNormToView(ref.normalizedBox);
-    final actual = ref.boundingBox;
-
-    final h = _mirrorH(predicted);
-    final v = _mirrorV(predicted);
-    final hv = _mirrorV(h);
-
-    final dBase = _l1(predicted, actual);
-    final dH = _l1(h, actual);
-    final dV = _l1(v, actual);
-    final dHV = _l1(hv, actual);
-
-    // Choose the transform with minimal error; add a small bias to reduce flicker.
-    double min = dBase;
-    var flipH = false;
-    var flipV = false;
-    if (dH + 0.5 < min) {
-      min = dH;
-      flipH = true;
-      flipV = false;
-    }
-    if (dV + 0.5 < min) {
-      min = dV;
-      flipH = false;
-      flipV = true;
-    }
-    if (dHV + 0.5 < min) {
-      min = dHV;
-      flipH = true;
-      flipV = true;
-    }
-
-    return (flipH, flipV);
   }
 
   // Lightweight throttled logger for transform parameters – useful to compare
@@ -423,8 +270,6 @@ class _SegmentationMaskPainter extends CustomPainter {
     required double scale,
     required double dx,
     required double dy,
-    required bool effFlipH,
-    required bool effFlipV,
   }) {
     final now = DateTime.now();
     if (_lastTransformLog != null &&
@@ -436,7 +281,7 @@ class _SegmentationMaskPainter extends CustomPainter {
       'SEGMENTATION DEBUG — view=${view.width.toStringAsFixed(0)}x${view.height.toStringAsFixed(0)} '
       'src=${sourceW.toStringAsFixed(1)}x${sourceH.toStringAsFixed(1)} '
       'scale=${scale.toStringAsFixed(4)} dx=${dx.toStringAsFixed(1)} dy=${dy.toStringAsFixed(1)} '
-      'flip(h:$flipHorizontal v:$flipVertical) eff(h:$effFlipH v:$effFlipV)',
+      'flip(h:$flipHorizontal v:$flipVertical)',
     );
   }
 }

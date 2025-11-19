@@ -35,8 +35,8 @@ class SegmentationController extends ChangeNotifier {
   List<YOLOResult> _currentDetections = const [];
   List<YOLOResult> _poseDetections = const [];
   List<YOLOModelSpec> _yoloModels = const [];
-  bool _flipMaskHorizontal = true;
-  bool _flipMaskVertical = false;
+  bool _flipMaskHorizontal = false;
+  bool _flipMaskVertical = true;
   final bool _preferFrontCamera = true;
   bool _defaultCameraApplied = false;
   Timer? _cameraRetryTimer;
@@ -50,6 +50,7 @@ class SegmentationController extends ChangeNotifier {
     includePoses: _overlayMode != SegmentationOverlayMode.backgroundReplacement,
     includeOBB: false,
     includeOriginalImage: false,
+    // Ensure max FPS by setting these to null
     maxFPS: null,
     throttleInterval: null,
     inferenceFrequency: null,
@@ -70,6 +71,11 @@ class SegmentationController extends ChangeNotifier {
   String? get errorMessage => _errorMessage;
   List<YOLOResult> get detections => _currentDetections;
   List<YOLOResult> get poseDetections => _poseDetections;
+  
+  // New getters for analysis
+  int get segmentationCount => _currentDetections.where((d) => d.mask != null).length;
+  int get poseCount => _poseDetections.length;
+
   List<YOLOModelSpec> get yoloModels => _yoloModels;
   bool get flipMaskHorizontal => _flipMaskHorizontal;
   bool get flipMaskVertical => _flipMaskVertical;

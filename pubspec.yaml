@@ -38,9 +38,7 @@ dependencies:
   path_provider: ^2.1.4
   archive: ^3.6.1
   ultralytics_yolo:
-    git:
-      url: https://github.com/pinball83/yolo-flutter-app.git
-      ref: daa49b686cd9f3a13d9c29c7a55fac3af59d7b04
+    path: ../yolo-flutter-app/
 
 dev_dependencies:
   flutter_test:

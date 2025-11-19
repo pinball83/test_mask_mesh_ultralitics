@@ -54,7 +54,8 @@ class SegmentationCameraView extends StatelessWidget {
           left: 16,
           child: _StatsBadge(
             fps: controller.fps,
-            detections: controller.detections.length,
+            segmentationCount: controller.segmentationCount,
+            poseCount: controller.poseCount,
           ),
         ),
       ],
@@ -208,10 +209,15 @@ class _ErrorState extends StatelessWidget {
 }
 
 class _StatsBadge extends StatelessWidget {
-  const _StatsBadge({required this.fps, required this.detections});
+  const _StatsBadge({
+    required this.fps,
+    required this.segmentationCount,
+    required this.poseCount,
+  });
 
   final double fps;
-  final int detections;
+  final int segmentationCount;
+  final int poseCount;
 
   @override
   Widget build(BuildContext context) {
@@ -227,8 +233,12 @@ class _StatsBadge extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Detections: $detections'),
             Text('FPS: ${fps.toStringAsFixed(1)}'),
+            const SizedBox(height: 4),
+            Text('Seg: $segmentationCount'),
+            Text('Pose: $poseCount'),
+            const SizedBox(height: 4),
+            Text('Total: ${segmentationCount + poseCount}'),
           ],
         ),
       ),
