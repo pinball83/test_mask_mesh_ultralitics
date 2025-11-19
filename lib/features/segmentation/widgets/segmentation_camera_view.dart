@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:ultralytics_yolo/yolo_view.dart';
 
 import '../controller/segmentation_controller.dart';
-import 'selfie_shader_overlay.dart';
+import 'combined_overlay.dart';
 import 'segmentation_overlay.dart';
 
 class SegmentationCameraView extends StatelessWidget {
