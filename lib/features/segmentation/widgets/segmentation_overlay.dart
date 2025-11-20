@@ -135,10 +135,12 @@ class _SegmentationMaskPainter extends CustomPainter {
     final dx = geometry.dx;
     final dy = geometry.dy;
 
-    // Auto-mirroring detection is disabled for both iOS and Android to ensure
-    // consistent behavior controlled solely by the external flipHorizontal/flipVertical
-    // parameters. The heuristic was causing instability on Android when the head was bent.
-    final effectiveFlipH = flipHorizontal;
+    // Mask tensors are already mirrored for the front camera by the platform
+    // (see Segmenter.generateCombinedMaskImage), so applying an additional
+    // horizontal flip here would invert the mask. Keep vertical correction for
+    // the upside-down source tensor, but disable extra horizontal mirroring.
+    const maskSourceIsMirrored = true;
+    final effectiveFlipH = maskSourceIsMirrored ? false : flipHorizontal;
     const maskSourceIsUpsideDown = true;
     final effectiveFlipV = maskSourceIsUpsideDown ^ flipVertical;
 

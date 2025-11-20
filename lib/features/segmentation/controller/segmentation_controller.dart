@@ -35,7 +35,7 @@ class SegmentationController extends ChangeNotifier {
   List<YOLOResult> _currentDetections = const [];
   List<YOLOResult> _poseDetections = const [];
   List<YOLOModelSpec> _yoloModels = const [];
-  bool _flipMaskHorizontal = false;
+  bool _flipMaskHorizontal = true;
   bool _flipMaskVertical = true;
   final bool _preferFrontCamera = true;
   bool _defaultCameraApplied = false;
@@ -71,9 +71,10 @@ class SegmentationController extends ChangeNotifier {
   String? get errorMessage => _errorMessage;
   List<YOLOResult> get detections => _currentDetections;
   List<YOLOResult> get poseDetections => _poseDetections;
-  
+
   // New getters for analysis
-  int get segmentationCount => _currentDetections.where((d) => d.mask != null).length;
+  int get segmentationCount =>
+      _currentDetections.where((d) => d.mask != null).length;
   int get poseCount => _poseDetections.length;
 
   List<YOLOModelSpec> get yoloModels => _yoloModels;
