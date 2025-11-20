@@ -213,7 +213,10 @@ class _PoseOverlayPainter extends CustomPainter {
     // consistent behavior controlled solely by the external flipHorizontal/flipVertical
     // parameters. The heuristic was causing instability on Android when the head was bent.
     final effectiveFlipH = flipHorizontal;
-    final effectiveFlipV = flipVertical;
+    // Pose keypoints are already reported in the correct upright orientation
+    // relative to the camera feed, so we intentionally ignore vertical flip
+    // here to avoid inverting the mask around the horizontal axis.
+    const effectiveFlipV = false;
 
     final viewPoints = _ViewPoints(
       faceRect: _mapRectToCanvas(
@@ -345,7 +348,23 @@ class _PoseOverlayPainter extends CustomPainter {
   }
 
   Offset _selectAnchor(_ViewPoints viewPoints, Size size) {
-    return viewPoints.nose ??
+    final nose = viewPoints.nose;
+    final upperLip = viewPoints.upperLip;
+
+    // Prefer anchoring the mask between the nose tip and the upper lip so the
+    // sprite follows the actual mouth region instead of the face center.
+    if (nose != null && upperLip != null) {
+      // Blend slightly closer to the nose so the mask sits just above the lip.
+      const t = 0.6;
+      return Offset(
+        upperLip.dx + (nose.dx - upperLip.dx) * t,
+        upperLip.dy + (nose.dy - upperLip.dy) * t,
+      );
+    }
+
+    // Fallbacks preserve previous behaviour.
+    return upperLip ??
+        nose ??
         viewPoints.noseBridgeEnd ??
         viewPoints.faceRect?.center ??
         Offset(size.width / 2, size.height / 2);
