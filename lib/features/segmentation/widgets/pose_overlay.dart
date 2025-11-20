@@ -8,8 +8,8 @@ import '../utils/detection_view_geometry.dart';
 
 /// Pose-driven overlay that draws facial debug markers and a mustache sprite.
 /// The name is kept for backwards compatibility with the previous shader-based implementation.
-class SelfieShaderOverlay extends StatefulWidget {
-  const SelfieShaderOverlay({
+class PoseOverlay extends StatefulWidget {
+  const PoseOverlay({
     super.key,
     required this.detections,
     required this.poseDetections,
@@ -31,10 +31,10 @@ class SelfieShaderOverlay extends StatefulWidget {
   final bool showMustache;
 
   @override
-  State<SelfieShaderOverlay> createState() => _SelfieShaderOverlayState();
+  State<PoseOverlay> createState() => _PoseOverlayState();
 }
 
-class _SelfieShaderOverlayState extends State<SelfieShaderOverlay> {
+class _PoseOverlayState extends State<PoseOverlay> {
   ui.Image? _mustacheImage;
   ImageStream? _mustacheStream;
   ImageStreamListener? _mustacheListener;
@@ -46,7 +46,7 @@ class _SelfieShaderOverlayState extends State<SelfieShaderOverlay> {
   }
 
   @override
-  void didUpdateWidget(covariant SelfieShaderOverlay oldWidget) {
+  void didUpdateWidget(covariant PoseOverlay oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.mustacheAsset != widget.mustacheAsset) {
       _resolveMustache();

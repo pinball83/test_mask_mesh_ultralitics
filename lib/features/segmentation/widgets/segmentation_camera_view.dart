@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:test_mask_mesh_ultralitics/features/segmentation/widgets/pose_overlay.dart';
 import 'package:ultralytics_yolo/yolo_view.dart';
 
 import '../controller/segmentation_controller.dart';
-import 'combined_overlay.dart';
 import 'segmentation_overlay.dart';
 
 class SegmentationCameraView extends StatelessWidget {
@@ -82,7 +82,7 @@ List<Widget> _buildOverlays(SegmentationController controller) {
     case SegmentationOverlayMode.maskOnly:
       overlays.add(
         Positioned.fill(
-          child: SelfieShaderOverlay(
+          child: PoseOverlay(
             // Pass only segmentation detections to ensure transform (srcW/H)
             // is derived from the same reference as the background overlay.
             detections: controller.detections
@@ -112,7 +112,7 @@ List<Widget> _buildOverlays(SegmentationController controller) {
       );
       overlays.add(
         Positioned.fill(
-          child: SelfieShaderOverlay(
+          child: PoseOverlay(
             detections: controller.detections
                 .where((d) => (d.mask?.isNotEmpty ?? false))
                 .toList(growable: false),
