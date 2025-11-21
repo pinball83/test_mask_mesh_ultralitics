@@ -139,7 +139,7 @@ class _SegmentationMaskPainter extends CustomPainter {
     // (see Segmenter.generateCombinedMaskImage), so applying an additional
     // horizontal flip here would invert the mask. Keep vertical correction for
     // the upside-down source tensor, but disable extra horizontal mirroring.
-    const maskSourceIsMirrored = true;
+    const maskSourceIsMirrored = false;
     final effectiveFlipH = maskSourceIsMirrored ? false : flipHorizontal;
     const maskSourceIsUpsideDown = true;
     final effectiveFlipV = maskSourceIsUpsideDown ^ flipVertical;
