@@ -23,14 +23,115 @@ class SimplePoseOverlay extends StatelessWidget {
       return const SizedBox.shrink();
     }
 
-    return IgnorePointer(
-      child: CustomPaint(
-        painter: _SimplePosePainter(
-          poseDetections: poseDetections,
-          flipHorizontal: flipHorizontal,
-          flipVertical: flipVertical,
-          modelInputSize: modelInputSize,
-        ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final size = Size(constraints.maxWidth, constraints.maxHeight);
+        return Stack(
+          children: [
+            IgnorePointer(
+              child: CustomPaint(
+                painter: _SimplePosePainter(
+                  poseDetections: poseDetections,
+                  flipHorizontal: flipHorizontal,
+                  flipVertical: flipVertical,
+                  modelInputSize: modelInputSize,
+                ),
+                size: size,
+              ),
+            ),
+            if (poseDetections.isNotEmpty)
+              Positioned(
+                top: 50,
+                right: 10,
+                child: _DebugInfoOverlay(
+                  detection: poseDetections.first,
+                  viewSize: size,
+                  modelInputSize: modelInputSize,
+                  flipHorizontal: flipHorizontal,
+                  flipVertical: flipVertical,
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _DebugInfoOverlay extends StatelessWidget {
+  const _DebugInfoOverlay({
+    required this.detection,
+    required this.viewSize,
+    required this.modelInputSize,
+    required this.flipHorizontal,
+    required this.flipVertical,
+  });
+
+  final YOLOResult detection;
+  final Size viewSize;
+  final double modelInputSize;
+  final bool flipHorizontal;
+  final bool flipVertical;
+
+  @override
+  Widget build(BuildContext context) {
+    final box = detection.boundingBox;
+    final nBox = detection.normalizedBox;
+    final keypoints = detection.keypoints;
+
+    String keypointInfo = 'No Keypoints';
+    if (keypoints != null && keypoints.isNotEmpty) {
+      final nose = keypoints[0];
+      keypointInfo =
+          'Nose: (${nose.x.toStringAsFixed(1)}, ${nose.y.toStringAsFixed(1)})';
+    }
+
+    // Calculations from _SimplePosePainter
+    double imgW = 0;
+    double imgH = 0;
+    double scale = 0;
+
+    if (nBox.width > 0 && nBox.height > 0) {
+      imgW = box.width / nBox.width;
+      imgH = box.height / nBox.height;
+      scale = modelInputSize / max(imgW, imgH);
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(8),
+      color: Colors.black.withOpacity(0.7),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'View: ${viewSize.width.toStringAsFixed(0)}x${viewSize.height.toStringAsFixed(0)}',
+            style: const TextStyle(color: Colors.white, fontSize: 10),
+          ),
+          Text(
+            'Box: ${box.width.toStringAsFixed(0)}x${box.height.toStringAsFixed(0)} @ (${box.left.toStringAsFixed(0)}, ${box.top.toStringAsFixed(0)})',
+            style: const TextStyle(color: Colors.white, fontSize: 10),
+          ),
+          Text(
+            'NBox: ${nBox.width.toStringAsFixed(2)}x${nBox.height.toStringAsFixed(2)}',
+            style: const TextStyle(color: Colors.white, fontSize: 10),
+          ),
+          Text(
+            'Img: ${detection.imageSize != null ? "${detection.imageSize!.width.toStringAsFixed(0)}x${detection.imageSize!.height.toStringAsFixed(0)} (Native)" : "${imgW.toStringAsFixed(0)}x${imgH.toStringAsFixed(0)} (Inferred)"}',
+            style: const TextStyle(color: Colors.white, fontSize: 10),
+          ),
+          Text(
+            'Scale: ${scale.toStringAsFixed(3)}',
+            style: const TextStyle(color: Colors.white, fontSize: 10),
+          ),
+          Text(
+            keypointInfo,
+            style: const TextStyle(color: Colors.white, fontSize: 10),
+          ),
+          Text(
+            'Flip: H=$flipHorizontal, V=$flipVertical',
+            style: const TextStyle(color: Colors.white, fontSize: 10),
+          ),
+        ],
       ),
     );
   }
@@ -68,7 +169,7 @@ class _SimplePosePainter extends CustomPainter {
     if (poseDetection == null) return;
 
     // Draw blue bounding box
-    // _drawBoundingBox(canvas, poseDetection, size);
+    _drawBoundingBox(canvas, poseDetection, size);
 
     // Draw landmarks
     _drawLandmarks(canvas, poseDetection, size);
@@ -139,6 +240,34 @@ class _SimplePosePainter extends CustomPainter {
     // BoundingBox is in Image Coordinates.
     // We need to transform Keypoints from Model Space to Image Space.
 
+    // New Logic: Use explicit Image Size if available
+    if (detection.imageSize != null) {
+      final imageSize = detection.imageSize!;
+
+      // Calculate Aspect Fill scale and offset
+      final double scaleX = viewSize.width / imageSize.width;
+      final double scaleY = viewSize.height / imageSize.height;
+      final double scale = max(scaleX, scaleY);
+
+      final double scaledW = imageSize.width * scale;
+      final double scaledH = imageSize.height * scale;
+      final double dx = (viewSize.width - scaledW) / 2.0;
+      final double dy = (viewSize.height - scaledH) / 2.0;
+
+      double screenX = (point.x * scale) + dx;
+      double screenY = (point.y * scale) + dy;
+
+      if (flipHorizontal) {
+        screenX = viewSize.width - screenX;
+      }
+
+      return _PosePoint(
+        imagePosition: Offset(screenX, screenY),
+        confidence: confidence,
+      );
+    }
+
+    // Fallback Logic (Legacy)
     final box = detection.boundingBox;
     final nBox = detection.normalizedBox;
 
