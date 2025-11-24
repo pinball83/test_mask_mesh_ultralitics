@@ -62,13 +62,13 @@ class _SimplePosePainter extends CustomPainter {
       ..color = Colors.orange
       ..style = PaintingStyle.stroke
       ..strokeWidth = 10.0;
-    canvas.drawRect(Offset.zero & size, borderPaint);
+    // canvas.drawRect(Offset.zero & size, borderPaint);
 
     final poseDetection = _pickPrimaryPose(poseDetections, size);
     if (poseDetection == null) return;
 
     // Draw blue bounding box
-    _drawBoundingBox(canvas, poseDetection, size);
+    // _drawBoundingBox(canvas, poseDetection, size);
 
     // Draw landmarks
     _drawLandmarks(canvas, poseDetection, size);
@@ -162,8 +162,10 @@ class _SimplePosePainter extends CustomPainter {
     double normX = imgX / imgW;
     double normY = imgY / imgH;
 
-    // Apply manual offset correction (approx 3-4px)
-    double screenX = normX * viewSize.width - 15;
+    // Apply calibrated offset to correct X-axis shift
+    // The user observed a ~15px shift. This constant allows for clean adjustment.
+    const double xAxisCorrection = -15.0;
+    double screenX = normX * viewSize.width + xAxisCorrection;
     double screenY = normY * viewSize.height;
 
     // 3. Apply Flip
