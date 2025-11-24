@@ -67,59 +67,73 @@ class _SimplePosePainter extends CustomPainter {
     final poseDetection = _pickPrimaryPose(poseDetections, size);
     if (poseDetection == null) return;
 
-    final keypoints = poseDetection.keypoints;
-    if (keypoints == null || keypoints.isEmpty) return;
+    // Draw blue bounding box
+    _drawBoundingBox(canvas, poseDetection, size);
 
-    final nose = _mapPosePoint(
-      detection: poseDetection,
-      index: 0,
-      viewSize: size,
-    );
-    final leftEye = _mapPosePoint(
-      detection: poseDetection,
-      index: 1,
-      viewSize: size,
-    );
-    final rightEye = _mapPosePoint(
-      detection: poseDetection,
-      index: 2,
-      viewSize: size,
-    );
-
-    final nosePaint = Paint()
-      ..color = Colors.red
-      ..style = PaintingStyle.fill;
-
-    final leftEyePaint = Paint()
-      ..color = Colors.green
-      ..style = PaintingStyle.fill;
-
-    final rightEyePaint = Paint()
-      ..color = Colors.blue
-      ..style = PaintingStyle.fill;
-
-    if (nose != null && nose.confidence >= _noseConfidence) {
-      canvas.drawCircle(nose.imagePosition, 8.0, nosePaint);
-    }
-
-    if (leftEye != null && leftEye.confidence >= _eyeConfidence) {
-      canvas.drawCircle(leftEye.imagePosition, 6.0, leftEyePaint);
-    }
-
-    if (rightEye != null && rightEye.confidence >= _eyeConfidence) {
-      canvas.drawCircle(rightEye.imagePosition, 6.0, rightEyePaint);
-    }
+    // Draw landmarks
+    _drawLandmarks(canvas, poseDetection, size);
   }
 
   YOLOResult? _pickPrimaryPose(List<YOLOResult> list, Size size) {
     return list.first;
   }
 
-  _PosePoint? _mapPosePoint({
-    required YOLOResult detection,
-    required int index,
-    required Size viewSize,
-  }) {
+  void _drawBoundingBox(
+    Canvas canvas,
+    YOLOResult detection,
+    Size viewSize,
+  ) {
+    final nBox = detection.normalizedBox;
+
+    var left = nBox.left * viewSize.width;
+    var top = nBox.top * viewSize.height;
+    var right = nBox.right * viewSize.width;
+    var bottom = nBox.bottom * viewSize.height;
+
+    final rect = Rect.fromLTRB(left, top, right, bottom);
+    final boxPaint = Paint()
+      ..color = Colors.blue
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0;
+    canvas.drawRect(rect, boxPaint);
+  }
+
+  void _drawLandmarks(
+    Canvas canvas,
+    YOLOResult detection,
+    Size viewSize,
+  ) {
+    final keypoints = detection.keypoints;
+    if (keypoints == null || keypoints.isEmpty) return;
+
+    final nose = _mapPosePoint(detection, 0, viewSize);
+    final leftEye = _mapPosePoint(detection, 1, viewSize);
+    final rightEye = _mapPosePoint(detection, 2, viewSize);
+
+    if (nose != null && nose.confidence >= _noseConfidence) {
+      canvas.drawCircle(nose.imagePosition, 8.0, Paint()..color = Colors.red);
+    }
+    if (leftEye != null && leftEye.confidence >= _eyeConfidence) {
+      canvas.drawCircle(
+        leftEye.imagePosition,
+        6.0,
+        Paint()..color = Colors.green,
+      );
+    }
+    if (rightEye != null && rightEye.confidence >= _eyeConfidence) {
+      canvas.drawCircle(
+        rightEye.imagePosition,
+        6.0,
+        Paint()..color = Colors.blue,
+      );
+    }
+  }
+
+  _PosePoint? _mapPosePoint(
+    YOLOResult detection,
+    int index,
+    Size viewSize,
+  ) {
     final keypoints = detection.keypoints;
     final confidences = detection.keypointConfidences;
     if (keypoints == null || index < 0 || index >= keypoints.length) {
@@ -151,42 +165,27 @@ class _SimplePosePainter extends CustomPainter {
 
     // 3. Calculate Letterboxing parameters used by the model
     final scale = modelSize / max(imgW, imgH);
-    final paddingX = (modelSize - imgW * scale) / 2.0;
-    final paddingY = (modelSize - imgH * scale) / 2.0;
 
     // 4. Transform Keypoint (Model -> Image)
-    // x_model = (x_img * scale) + paddingX
-    // x_img = (x_model - paddingX) / scale
-    double imgX = (point.x - paddingX) / scale;
-    double imgY = (point.y - paddingY) / scale;
+    double imgX = (point.x) / scale;
+    double imgY = (point.y) / scale;
 
     // 5. Normalize (Image -> 0..1)
     double normX = imgX / imgW;
     double normY = imgY / imgH;
 
-    // 6. Scale to View (0..1 -> View) using BoxFit.cover
-    // We assume the camera preview fills the screen (BoxFit.cover), cropping if necessary.
-    final scaleX = viewSize.width / imgW;
-    final scaleY = viewSize.height / imgH;
-    final scaleView = max(scaleX, scaleY); // BoxFit.cover
+    double screenX = normX * viewSize.width;
+    double screenY = normY * viewSize.height;
 
-    // Calculate offsets to center the image in the view
-    final dx = (viewSize.width - imgW * scaleView) / 2.0;
-    final dy = (viewSize.height - imgH * scaleView) / 2.0;
-
-    double screenX = normX * imgW * scaleView + dx;
-    double screenY = normY * imgH * scaleView + dy;
-
-    // 7. Apply Flip (if needed)
+    // 3. Apply Flip
     if (flipHorizontal) {
       screenX = viewSize.width - screenX;
     }
 
-    // Vertical flip removed as per user testing
-
-    final imagePosition = Offset(screenX, screenY);
-
-    return _PosePoint(imagePosition: imagePosition, confidence: confidence);
+    return _PosePoint(
+      imagePosition: Offset(screenX, screenY),
+      confidence: confidence,
+    );
   }
 
   @override
@@ -196,6 +195,7 @@ class _SimplePosePainter extends CustomPainter {
         oldDelegate.flipVertical != flipVertical;
   }
 }
+
 
 class _PosePoint {
   const _PosePoint({required this.imagePosition, required this.confidence});
