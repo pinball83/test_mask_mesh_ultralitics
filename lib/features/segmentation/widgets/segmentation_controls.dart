@@ -51,6 +51,10 @@ class SegmentationControls extends StatelessWidget {
                       value: SegmentationOverlayMode.combined,
                       child: Text('Combined'),
                     ),
+                    DropdownMenuItem(
+                      value: SegmentationOverlayMode.simplePose,
+                      child: Text('Simple pose'),
+                    ),
                   ],
                 ),
               ),

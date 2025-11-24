@@ -44,7 +44,7 @@ class _SegmentationScreenState extends State<SegmentationScreen> {
                 Expanded(
                   child: SegmentationCameraView(controller: _controller),
                 ),
-                SegmentationControls(controller: _controller),
+                 SegmentationControls(controller: _controller),
               ],
             );
           },

@@ -11,7 +11,12 @@ import 'package:ultralytics_yolo/yolo_streaming_config.dart';
 
 import '../services/model_loader.dart';
 
-enum SegmentationOverlayMode { backgroundReplacement, maskOnly, combined }
+enum SegmentationOverlayMode {
+  backgroundReplacement,
+  maskOnly,
+  combined,
+  simplePose,
+}
 
 class SegmentationController extends ChangeNotifier {
   SegmentationController({ModelLoader? modelLoader})
@@ -22,7 +27,7 @@ class SegmentationController extends ChangeNotifier {
 
   bool _isLoading = true;
   bool _isUnsupportedPlatform = false;
-  SegmentationOverlayMode _overlayMode = SegmentationOverlayMode.combined;
+  SegmentationOverlayMode _overlayMode = SegmentationOverlayMode.simplePose;
   double _confidenceThreshold = 0.45;
   double _maskThreshold = 0.4;
   double _currentZoomLevel = 1.0;
@@ -46,7 +51,9 @@ class SegmentationController extends ChangeNotifier {
     includeClassifications: false,
     includeProcessingTimeMs: true,
     includeFps: true,
-    includeMasks: _overlayMode != SegmentationOverlayMode.maskOnly,
+    includeMasks:
+        _overlayMode != SegmentationOverlayMode.maskOnly &&
+        _overlayMode != SegmentationOverlayMode.simplePose,
     includePoses: _overlayMode != SegmentationOverlayMode.backgroundReplacement,
     includeOBB: false,
     includeOriginalImage: false,
@@ -159,7 +166,7 @@ class SegmentationController extends ChangeNotifier {
       await yoloController.setThresholds(
         confidenceThreshold: _confidenceThreshold,
         iouThreshold: 0.45,
-        numItemsThreshold: 10,
+        numItemsThreshold: 1,
       );
 
       _statusMessage = 'Model ready. Initializing camera...';
@@ -181,7 +188,7 @@ class SegmentationController extends ChangeNotifier {
     _currentDetections = results;
     if (_overlayMode != SegmentationOverlayMode.backgroundReplacement) {
       _poseDetections = results
-          .where((result) => result.keypoints?.isNotEmpty ?? false)
+          .where((result) => result.keypoints != null)
           .toList(growable: false);
     } else {
       _poseDetections = const [];
@@ -334,6 +341,26 @@ class SegmentationController extends ChangeNotifier {
               modelPath: posePath,
               type: ModelLoader.modelNamePose,
               task: YOLOTask.pose,
+            ),
+          ];
+        }
+        break;
+      case SegmentationOverlayMode.simplePose:
+        if (posePath != null) {
+          models = [
+            YOLOModelSpec(
+              modelPath: posePath,
+              type: ModelLoader.modelNamePose,
+              task: YOLOTask.pose,
+            ),
+          ];
+        } else {
+          // Fallback if pose model missing (shouldn't happen if init succeeds)
+          models = [
+            YOLOModelSpec(
+              modelPath: segPath,
+              type: ModelLoader.modelNameSegmentation,
+              task: YOLOTask.segment,
             ),
           ];
         }

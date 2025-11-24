@@ -218,7 +218,7 @@ class _PoseOverlayPainter extends CustomPainter {
       ..style = PaintingStyle.fill;
 
     // Draw raw bounding box
-    final bbox = pose.boundingBox;
+    final bbox = pose.normalizedBox;
     if (!bbox.isEmpty) {
       var left = bbox.left;
       var right = bbox.right;

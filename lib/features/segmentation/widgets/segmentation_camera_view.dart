@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:test_mask_mesh_ultralitics/features/segmentation/widgets/pose_overlay.dart';
+import 'package:test_mask_mesh_ultralitics/features/segmentation/widgets/simple_pose_overlay.dart';
 import 'package:ultralytics_yolo/yolo_view.dart';
 
 import '../controller/segmentation_controller.dart';
@@ -83,11 +84,6 @@ List<Widget> _buildOverlays(SegmentationController controller) {
       overlays.add(
         Positioned.fill(
           child: PoseOverlay(
-            // Pass only segmentation detections to ensure transform (srcW/H)
-            // is derived from the same reference as the background overlay.
-            // detections: controller.detections
-            //     .where((d) => (d.mask?.isNotEmpty ?? false))
-            //     .toList(growable: false),
             poseDetections: controller.poseDetections,
             flipHorizontal: controller.flipMaskHorizontal,
             flipVertical: controller.flipMaskVertical,
@@ -113,15 +109,23 @@ List<Widget> _buildOverlays(SegmentationController controller) {
       overlays.add(
         Positioned.fill(
           child: PoseOverlay(
-            // detections: controller.detections
-            //     .where((d) => (d.mask?.isNotEmpty ?? false))
-            //     .toList(growable: false),
             poseDetections: controller.poseDetections,
             flipHorizontal: controller.flipMaskHorizontal,
             flipVertical: controller.flipMaskVertical,
             mustacheAlpha: 1.0,
             debugPose: false,
             showMustache: true,
+          ),
+        ),
+      );
+      break;
+    case SegmentationOverlayMode.simplePose:
+      overlays.add(
+        Positioned.fill(
+          child: SimplePoseOverlay(
+            poseDetections: controller.poseDetections,
+            flipHorizontal: controller.flipMaskHorizontal,
+            flipVertical: controller.flipMaskVertical,
           ),
         ),
       );
