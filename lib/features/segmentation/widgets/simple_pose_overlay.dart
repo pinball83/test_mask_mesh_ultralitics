@@ -78,11 +78,7 @@ class _SimplePosePainter extends CustomPainter {
     return list.first;
   }
 
-  void _drawBoundingBox(
-    Canvas canvas,
-    YOLOResult detection,
-    Size viewSize,
-  ) {
+  void _drawBoundingBox(Canvas canvas, YOLOResult detection, Size viewSize) {
     final nBox = detection.normalizedBox;
 
     var left = nBox.left * viewSize.width;
@@ -98,11 +94,7 @@ class _SimplePosePainter extends CustomPainter {
     canvas.drawRect(rect, boxPaint);
   }
 
-  void _drawLandmarks(
-    Canvas canvas,
-    YOLOResult detection,
-    Size viewSize,
-  ) {
+  void _drawLandmarks(Canvas canvas, YOLOResult detection, Size viewSize) {
     final keypoints = detection.keypoints;
     if (keypoints == null || keypoints.isEmpty) return;
 
@@ -129,11 +121,7 @@ class _SimplePosePainter extends CustomPainter {
     }
   }
 
-  _PosePoint? _mapPosePoint(
-    YOLOResult detection,
-    int index,
-    Size viewSize,
-  ) {
+  _PosePoint? _mapPosePoint(YOLOResult detection, int index, Size viewSize) {
     final keypoints = detection.keypoints;
     final confidences = detection.keypointConfidences;
     if (keypoints == null || index < 0 || index >= keypoints.length) {
@@ -174,7 +162,8 @@ class _SimplePosePainter extends CustomPainter {
     double normX = imgX / imgW;
     double normY = imgY / imgH;
 
-    double screenX = normX * viewSize.width;
+    // Apply manual offset correction (approx 3-4px)
+    double screenX = normX * viewSize.width - 15;
     double screenY = normY * viewSize.height;
 
     // 3. Apply Flip
@@ -195,7 +184,6 @@ class _SimplePosePainter extends CustomPainter {
         oldDelegate.flipVertical != flipVertical;
   }
 }
-
 
 class _PosePoint {
   const _PosePoint({required this.imagePosition, required this.confidence});
