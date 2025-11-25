@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:test_mask_mesh_ultralitics/features/segmentation/controller/optimized_video_segmentation_controller.dart';
+import 'package:test_mask_mesh_ultralitics/features/segmentation/view/optimized_video_segmentation_screen.dart';
 
 import '../controller/segmentation_controller.dart';
 import '../widgets/segmentation_camera_view.dart';
@@ -42,8 +44,7 @@ class _SegmentationScreenState extends State<SegmentationScreen> {
             onPressed: () {
               Navigator.of(context).push(
                 MaterialPageRoute(
-                  builder: (context) =>
-                      VideoSegmentationScreen(controller: _controller),
+                  builder: (context) => OptimizedVideoSegmentationScreen(),
                 ),
               );
             },

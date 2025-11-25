@@ -1,12 +1,10 @@
 import 'dart:ui' as ui;
-
 import 'package:flutter/material.dart';
 import 'package:ultralytics_yolo/models/yolo_result.dart';
-
 import '../utils/detection_view_geometry.dart';
 
-class SegmentationOverlay extends StatefulWidget {
-  const SegmentationOverlay({
+class CachedSegmentationOverlay extends StatefulWidget {
+  const CachedSegmentationOverlay({
     super.key,
     required this.detections,
     required this.maskThreshold,
@@ -24,13 +22,20 @@ class SegmentationOverlay extends StatefulWidget {
   final double maskSmoothing;
 
   @override
-  State<SegmentationOverlay> createState() => _SegmentationOverlayState();
+  State<CachedSegmentationOverlay> createState() => _CachedSegmentationOverlayState();
 }
 
-class _SegmentationOverlayState extends State<SegmentationOverlay> {
+class _CachedSegmentationOverlayState extends State<CachedSegmentationOverlay> {
   ui.Image? _backgroundImage;
   ImageStream? _imageStream;
   ImageStreamListener? _imageStreamListener;
+  
+  // Caching for performance
+  final Map<String, ui.Picture> _pictureCache = {};
+  final Map<String, ui.Image> _maskCache = {};
+  String? _lastCacheKey;
+  ui.Picture? _cachedPicture;
+  
   static const double _targetBackgroundWidth = 720.0;
 
   @override
@@ -40,7 +45,7 @@ class _SegmentationOverlayState extends State<SegmentationOverlay> {
   }
 
   @override
-  void didUpdateWidget(covariant SegmentationOverlay oldWidget) {
+  void didUpdateWidget(covariant CachedSegmentationOverlay oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.backgroundAsset != oldWidget.backgroundAsset) {
       _resolveBackgroundImage();
@@ -50,6 +55,7 @@ class _SegmentationOverlayState extends State<SegmentationOverlay> {
   @override
   void dispose() {
     _disposeImageStream();
+    _clearCache();
     super.dispose();
   }
 
@@ -100,6 +106,21 @@ class _SegmentationOverlayState extends State<SegmentationOverlay> {
     return picture.toImage(targetSize.width.round(), targetSize.height.round());
   }
 
+  String _generateCacheKey() {
+    final detectionsHash = widget.detections.map((d) => d.hashCode).join(',');
+    return '${widget.maskThreshold}_${widget.flipHorizontal}_${widget.flipVertical}_${widget.maskSmoothing}_$detectionsHash';
+  }
+
+  void _clearCache() {
+    for (final picture in _pictureCache.values) {
+      picture.dispose();
+    }
+    _pictureCache.clear();
+    _maskCache.clear();
+    _cachedPicture?.dispose();
+    _cachedPicture = null;
+  }
+
   @override
   Widget build(BuildContext context) {
     if (widget.detections.isEmpty) {
@@ -108,27 +129,33 @@ class _SegmentationOverlayState extends State<SegmentationOverlay> {
 
     return IgnorePointer(
       child: CustomPaint(
-        painter: _SegmentationMaskPainter(
+        painter: _CachedSegmentationMaskPainter(
           detections: widget.detections,
           maskThreshold: widget.maskThreshold,
           flipHorizontal: widget.flipHorizontal,
           flipVertical: widget.flipVertical,
           backgroundImage: _backgroundImage,
           maskSmoothing: widget.maskSmoothing,
+          cacheKey: _generateCacheKey(),
+          pictureCache: _pictureCache,
+          maskCache: _maskCache,
         ),
       ),
     );
   }
 }
 
-class _SegmentationMaskPainter extends CustomPainter {
-  const _SegmentationMaskPainter({
+class _CachedSegmentationMaskPainter extends CustomPainter {
+  const _CachedSegmentationMaskPainter({
     required this.detections,
     required this.maskThreshold,
     required this.flipHorizontal,
     required this.flipVertical,
     this.backgroundImage,
     this.maskSmoothing = 0.8,
+    required this.cacheKey,
+    required this.pictureCache,
+    required this.maskCache,
   });
 
   final List<YOLOResult> detections;
@@ -137,6 +164,9 @@ class _SegmentationMaskPainter extends CustomPainter {
   final bool flipVertical;
   final ui.Image? backgroundImage;
   final double maskSmoothing;
+  final String cacheKey;
+  final Map<String, ui.Picture> pictureCache;
+  final Map<String, ui.Image> maskCache;
 
   static final Paint _backgroundPaint = Paint()..color = Colors.black;
   static final Paint _erasePaintBase = Paint()
@@ -154,6 +184,29 @@ class _SegmentationMaskPainter extends CustomPainter {
       return;
     }
 
+    // Check cache first
+    if (pictureCache.containsKey(cacheKey)) {
+      final cachedPicture = pictureCache[cacheKey]!;
+      canvas.drawPicture(cachedPicture);
+      canvas.restore();
+      return;
+    }
+
+    // Create new picture and cache it
+    final recorder = ui.PictureRecorder();
+    final pictureCanvas = Canvas(recorder);
+    
+    _paintSegmentation(pictureCanvas, size, geometry);
+    
+    final picture = recorder.endRecording();
+    pictureCache[cacheKey] = picture;
+    
+    // Draw the new picture
+    canvas.drawPicture(picture);
+    canvas.restore();
+  }
+
+  void _paintSegmentation(Canvas canvas, Size size, DetectionViewGeometry geometry) {
     final sourceWidth = geometry.sourceWidth;
     final sourceHeight = geometry.sourceHeight;
     final scale = geometry.scale;
@@ -162,27 +215,12 @@ class _SegmentationMaskPainter extends CustomPainter {
     final dx = geometry.dx;
     final dy = geometry.dy;
 
-    // Mask tensors are already mirrored for the front camera by the platform
-    // (see Segmenter.generateCombinedMaskImage), so applying an additional
-    // horizontal flip here would invert the mask. Keep vertical correction for
-    // the upside-down source tensor, but disable extra horizontal mirroring.
     const maskSourceIsMirrored = false;
     final effectiveFlipH = maskSourceIsMirrored ? false : flipHorizontal;
     const maskSourceIsUpsideDown = true;
     final effectiveFlipV = maskSourceIsUpsideDown ^ flipVertical;
 
-    _logTransformOnce(
-      view: size,
-      sourceW: sourceWidth,
-      sourceH: sourceHeight,
-      scale: scale,
-      dx: dx,
-      dy: dy,
-    );
-
-    // Draw the replacement background on an offscreen layer, then punch out
-    // the subject area to reveal the camera feed underneath.
-    canvas.saveLayer(Offset.zero & size, Paint());
+    // Draw background
     if (backgroundImage != null) {
       paintImage(
         canvas: canvas,
@@ -194,12 +232,15 @@ class _SegmentationMaskPainter extends CustomPainter {
       canvas.drawRect(Offset.zero & size, _backgroundPaint);
     }
 
-    // Use dstOut to erase the background where the subject mask is present.
+    // Prepare mask painting
     final erasePaint = _erasePaintBase;
     erasePaint.maskFilter = maskSmoothing > 0
         ? ui.MaskFilter.blur(ui.BlurStyle.normal, maskSmoothing)
         : null;
 
+    // Batch mask drawing for better performance
+    final maskPaths = <Path>[];
+    
     for (final detection in detections) {
       final mask = detection.mask;
       final bounds = detection.boundingBox;
@@ -241,8 +282,7 @@ class _SegmentationMaskPainter extends CustomPainter {
         );
       }
 
-      _drawAggregatedMaskRows(
-        canvas: canvas,
+      final maskPath = _createMaskPath(
         mask: mask,
         maskWidth: maskWidth,
         maskHeight: maskHeight,
@@ -257,17 +297,20 @@ class _SegmentationMaskPainter extends CustomPainter {
         threshold: maskThreshold,
         flipH: effectiveFlipH,
         flipV: effectiveFlipV,
-        paint: erasePaint,
       );
+      
+      if (maskPath != null) {
+        maskPaths.add(maskPath);
+      }
     }
 
-    // Composite the punched-out background over the camera feed.
-    canvas.restore();
-    canvas.restore();
+    // Draw all masks in one operation
+    for (final path in maskPaths) {
+      canvas.drawPath(path, erasePaint);
+    }
   }
 
-  void _drawAggregatedMaskRows({
-    required Canvas canvas,
+  Path? _createMaskPath({
     required List<List<double>> mask,
     required int maskWidth,
     required int maskHeight,
@@ -282,8 +325,10 @@ class _SegmentationMaskPainter extends CustomPainter {
     required double threshold,
     required bool flipH,
     required bool flipV,
-    required Paint paint,
   }) {
+    final path = Path();
+    bool hasContent = false;
+
     for (var y = startY; y < endY; y++) {
       final row = mask[y];
       final mappedY = flipV ? (maskHeight - 1 - y) : y;
@@ -296,7 +341,6 @@ class _SegmentationMaskPainter extends CustomPainter {
           continue;
         }
 
-        // Aggregate contiguous "on" cells to reduce draw calls
         var runEnd = x + 1;
         while (runEnd < endX && row[runEnd] >= threshold) {
           runEnd++;
@@ -306,51 +350,30 @@ class _SegmentationMaskPainter extends CustomPainter {
         final drawWidth = (runEnd - x) * cellWidth;
         final left = dx + drawStart * cellWidth;
 
-        canvas.drawRect(Rect.fromLTWH(left, top, drawWidth, cellHeight), paint);
+        path.addRect(Rect.fromLTWH(left, top, drawWidth, cellHeight));
+        hasContent = true;
 
         x = runEnd;
       }
     }
+
+    return hasContent ? path : null;
   }
 
   @override
-  bool shouldRepaint(covariant _SegmentationMaskPainter oldDelegate) {
+  bool shouldRepaint(covariant _CachedSegmentationMaskPainter oldDelegate) {
     return oldDelegate.detections != detections ||
         oldDelegate.maskThreshold != maskThreshold ||
         oldDelegate.flipHorizontal != flipHorizontal ||
         oldDelegate.flipVertical != flipVertical ||
         oldDelegate.backgroundImage != backgroundImage ||
-        oldDelegate.maskSmoothing != maskSmoothing;
+        oldDelegate.maskSmoothing != maskSmoothing ||
+        oldDelegate.cacheKey != cacheKey;
   }
 
   int _clampIndex(int value, int min, int max) {
     if (value < min) return min;
     if (value > max) return max;
     return value;
-  }
-
-  // Lightweight throttled logger for transform parameters – useful to compare
-  // with pose keypoint mapping.
-  static DateTime? _lastTransformLog;
-  void _logTransformOnce({
-    required Size view,
-    required double sourceW,
-    required double sourceH,
-    required double scale,
-    required double dx,
-    required double dy,
-  }) {
-    final now = DateTime.now();
-    if (_lastTransformLog != null &&
-        now.difference(_lastTransformLog!).inMilliseconds < 1000) {
-      return;
-    }
-    _lastTransformLog = now;
-    debugPrint(
-      'SEGMENTATION DEBUG — view=${view.width.toStringAsFixed(0)}x${view.height.toStringAsFixed(0)} '
-      'src=${sourceW.toStringAsFixed(1)}x${sourceH.toStringAsFixed(1)} '
-      'scale=${scale.toStringAsFixed(4)} dx=${dx.toStringAsFixed(1)} dy=${dy.toStringAsFixed(1)} '
-      'flip(h:$flipHorizontal v:$flipVertical)',
-    );
   }
 }

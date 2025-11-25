@@ -47,21 +47,19 @@ class SegmentationController extends ChangeNotifier {
   Timer? _cameraRetryTimer;
 
   YOLOStreamingConfig get streamingConfig => YOLOStreamingConfig.custom(
-    includeDetections: true,
+    includeDetections: false,
     includeClassifications: false,
-    includeProcessingTimeMs: true,
-    includeFps: true,
-    includeMasks:
-        _overlayMode != SegmentationOverlayMode.maskOnly &&
-        _overlayMode != SegmentationOverlayMode.simplePose,
-    includePoses: _overlayMode != SegmentationOverlayMode.backgroundReplacement,
+    includeProcessingTimeMs: false,
+    includeFps: false,
+    includeMasks: true,
+    includePoses: true,
     includeOBB: false,
     includeOriginalImage: false,
     // Ensure max FPS by setting these to null
-    maxFPS: null,
+    maxFPS: 30,
     throttleInterval: null,
     inferenceFrequency: null,
-    skipFrames: null,
+    skipFrames: 3,
   );
 
   bool get isLoading => _isLoading;

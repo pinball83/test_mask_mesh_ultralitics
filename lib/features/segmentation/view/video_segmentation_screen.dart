@@ -33,6 +33,7 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
   bool _isProcessing = false;
   bool _segModelReady = false;
   bool _poseModelReady = false;
+  final bool _enablePose = !Platform.isIOS;
   String? _statusMessage;
 
   List<YOLOResult> _currentDetections = [];
@@ -41,13 +42,13 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
   String? _selectedMask;
 
   // FPS control
-  static const int _targetFps = 24;
+  static const int _targetFps = 30;
   static const int _defaultInferenceStride = 4; // run inference every N frames
   static const Duration _frameDuration = Duration(
     milliseconds: 1000 ~/ _targetFps,
   );
 
-  int get _inferenceStride => Platform.isIOS ? 3 : _defaultInferenceStride;
+  int get _inferenceStride => Platform.isIOS ? 1 : _defaultInferenceStride;
 
   bool _isPlaying = false;
 
@@ -81,27 +82,29 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
       }
     }
 
-    final poseModelPath = widget.controller.poseModelPath;
-    debugPrint('Initializing Pose Model: $poseModelPath');
-    if (poseModelPath != null) {
-      try {
-        final pose = YOLO(
-          modelPath: poseModelPath,
-          task: YOLOTask.pose,
-          useGpu: true,
-          useMultiInstance: true,
-        );
-        final loaded = await pose.loadModel();
-        if (loaded) {
-          _poseYolo = pose;
-          _poseModelReady = true;
-          debugPrint('Pose Model loaded successfully');
+    if (_enablePose) {
+      final poseModelPath = widget.controller.poseModelPath;
+      debugPrint('Initializing Pose Model: $poseModelPath');
+      if (poseModelPath != null) {
+        try {
+          final pose = YOLO(
+            modelPath: poseModelPath,
+            task: YOLOTask.pose,
+            useGpu: !Platform.isIOS, // prefer CPU on iOS for stability
+            useMultiInstance: true,
+          );
+          final loaded = await pose.loadModel();
+          if (loaded) {
+            _poseYolo = pose;
+            _poseModelReady = true;
+            debugPrint('Pose Model loaded successfully');
+          }
+        } catch (e) {
+          debugPrint('Error loading Pose Model: $e');
         }
-      } catch (e) {
-        debugPrint('Error loading Pose Model: $e');
+      } else {
+        debugPrint('Pose Model path is null');
       }
-    } else {
-      debugPrint('Pose Model path is null');
     }
   }
 
@@ -151,7 +154,7 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
       if (!hasFrames) {
         setState(() => _statusMessage = 'Extracting frames...');
         // Extract at 30fps, scale to 640 width (maintain aspect ratio) for performance
-        final scaledWidth = Platform.isIOS ? 480 : 360;
+        final scaledWidth = Platform.isIOS ? 640 : 360;
         final command =
             '-i ${videoFile.path} -vf "fps=$_targetFps,scale=$scaledWidth:-1" ${framesDir.path}/frame_%04d.jpg';
         final session = await FFmpegKit.execute(command);
@@ -210,7 +213,7 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
 
       final shouldInfer =
           _frameBytes.isNotEmpty &&
-          (_segModelReady || _poseModelReady) &&
+          (_segModelReady || (_enablePose && _poseModelReady)) &&
           (_currentFrameIndex % _inferenceStride == 0) &&
           !_isInferring;
       if (shouldInfer) {
@@ -245,13 +248,13 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
 
       // 1. Segmentation
       if (_segModelReady && _yolo != null) {
-        futures.add(_yolo!.predict(frameBytes, confidenceThreshold: 0.75));
+        futures.add(_yolo!.predict(frameBytes, confidenceThreshold: 0.65));
       } else {
         futures.add(Future.value(null));
       }
 
       // 2. Pose Detection
-      if (_poseModelReady && _poseYolo != null) {
+      if (_enablePose && _poseModelReady && _poseYolo != null) {
         futures.add(_poseYolo!.predict(frameBytes, confidenceThreshold: 0.5));
       } else {
         futures.add(Future.value(null));
@@ -276,10 +279,21 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
         );
       }
 
-      if (mounted) {
+      // Keep last good detections to reduce overlay flicker when a frame
+      // returns empty/failed results.
+      final nextDetections = detections.isNotEmpty
+          ? detections
+          : _currentDetections;
+      final nextPoseDetections = poseDetections.isNotEmpty
+          ? poseDetections
+          : _currentPoseDetections;
+
+      if (mounted &&
+          (nextDetections != _currentDetections ||
+              nextPoseDetections != _currentPoseDetections)) {
         setState(() {
-          _currentDetections = detections;
-          _currentPoseDetections = poseDetections;
+          _currentDetections = nextDetections;
+          _currentPoseDetections = nextPoseDetections;
         });
       }
     } catch (e) {
@@ -586,18 +600,20 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
                 if (_selectedBackground != null)
                   SegmentationOverlay(
                     detections: _currentDetections,
-                    maskThreshold: Platform.isIOS ? 0.4 : 0.5,
+                    maskThreshold: 0.5,
                     flipHorizontal: false,
                     flipVertical: true,
                     backgroundAsset: _selectedBackground,
+                    maskSmoothing: Platform.isIOS ? 0.0 : 0.8,
                   ),
                 // Face Mask Overlay
-                FaceMaskOverlay(
-                  poseDetections: _currentPoseDetections,
-                  maskAsset: _selectedMask,
-                  flipHorizontal: false,
-                  flipVertical: true,
-                ),
+                if (_enablePose)
+                  FaceMaskOverlay(
+                    poseDetections: _currentPoseDetections,
+                    maskAsset: _selectedMask,
+                    flipHorizontal: false,
+                    flipVertical: true,
+                  ),
                 // Controls
                 Positioned(
                   bottom: 32,
