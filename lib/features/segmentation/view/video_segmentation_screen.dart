@@ -33,6 +33,8 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
   List<YOLOResult> _currentDetections = [];
   ui.Image? _currentFrameImage;
   bool _isInferring = false;
+  String? _selectedBackground = 'assets/images/bg_image.jpg';
+  String? _selectedMask;
 
   // FPS control
   static const int _targetFps = 30;
@@ -189,7 +191,10 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
 
   Future<void> _runInferenceAsync(Uint8List frameBytes) async {
     try {
-      final result = await _yolo!.predict(frameBytes,confidenceThreshold: 0.75);
+      final result = await _yolo!.predict(
+        frameBytes,
+        confidenceThreshold: 0.75,
+      );
       final detections = (result['detections'] as List)
           .map((d) => YOLOResult.fromMap(d))
           .toList();
@@ -204,6 +209,167 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
     } finally {
       _isInferring = false;
     }
+  }
+
+  void _showBackgroundSelector() async {
+    final backgrounds = [
+      'assets/images/bg_image.jpg',
+      'assets/images/backgrounds/b_blur_on.png',
+      'assets/images/backgrounds/b_bookshelf.jpeg',
+      'assets/images/backgrounds/b_bubbles.jpeg',
+      'assets/images/backgrounds/b_cafe.jpeg',
+      'assets/images/backgrounds/b_cosy_street.jpeg',
+      'assets/images/backgrounds/b_fantasy.jpeg',
+      'assets/images/backgrounds/b_forest.jpeg',
+      'assets/images/backgrounds/b_harry_p.jpeg',
+      'assets/images/backgrounds/b_loft.jpeg',
+      'assets/images/backgrounds/b_mountains.jpeg',
+      'assets/images/backgrounds/b_neon.jpeg',
+      'assets/images/backgrounds/b_ocean.jpeg',
+      'assets/images/backgrounds/b_pedestrian_passage.jpeg',
+      'assets/images/backgrounds/b_rug.jpeg',
+      'assets/images/backgrounds/b_stars.jpeg',
+      'assets/images/backgrounds/b_valentine.jpeg',
+      'assets/images/backgrounds/b_vysotka.jpeg',
+    ];
+
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) => Container(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Select Background',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 16),
+              SizedBox(
+                height: 100,
+                child: ListView.builder(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: backgrounds.length,
+                  itemBuilder: (context, index) {
+                    final bg = backgrounds[index];
+                    final isSelected = _selectedBackground == bg;
+                    return GestureDetector(
+                      onTap: () {
+                        // Update main widget state for preview
+                        setState(() {
+                          _selectedBackground = bg;
+                        });
+                        // Update modal state for selection border
+                        setModalState(() {});
+                      },
+                      child: Container(
+                        width: 100,
+                        margin: const EdgeInsets.only(right: 8),
+                        decoration: BoxDecoration(
+                          border: Border.all(
+                            color: isSelected ? Colors.blue : Colors.grey,
+                            width: isSelected ? 3 : 1,
+                          ),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.asset(bg, fit: BoxFit.cover),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showMaskSelector() async {
+    final masks = [
+      null, // No mask option
+      'assets/images/masks/m_butterfly_hearts.png',
+      'assets/images/masks/m_cat.png',
+      'assets/images/masks/m_death_w_coat.png',
+      'assets/images/masks/m_diablo.png',
+      'assets/images/masks/m_harry_p.png',
+      'assets/images/masks/m_nymb.png',
+      'assets/images/masks/m_peaky_blinders.png',
+      'assets/images/masks/m_pirate.png',
+      'assets/images/masks/m_santa.png',
+    ];
+
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) => Container(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Select Mask',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 16),
+              SizedBox(
+                height: 100,
+                child: ListView.builder(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: masks.length,
+                  itemBuilder: (context, index) {
+                    final mask = masks[index];
+                    final isSelected = _selectedMask == mask;
+                    return GestureDetector(
+                      onTap: () {
+                        // Update main widget state for preview
+                        setState(() {
+                          _selectedMask = mask;
+                        });
+                        // Update modal state for selection border
+                        setModalState(() {});
+                      },
+                      child: Container(
+                        width: 100,
+                        margin: const EdgeInsets.only(right: 8),
+                        decoration: BoxDecoration(
+                          border: Border.all(
+                            color: isSelected ? Colors.blue : Colors.grey,
+                            width: isSelected ? 3 : 1,
+                          ),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: mask == null
+                              ? const Center(
+                                  child: Text(
+                                    'None',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                )
+                              : Image.asset(mask, fit: BoxFit.contain),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -240,8 +406,8 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
                   detections: _currentDetections,
                   maskThreshold: 0.5,
                   flipHorizontal: false,
-                  flipVertical: true ,
-                  backgroundAsset: 'assets/images/bg_image.jpg',
+                  flipVertical: true,
+                  backgroundAsset: _selectedBackground,
                 ),
                 // Controls
                 Positioned(
@@ -251,6 +417,14 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
+                      // Background selector button
+                      IconButton.filled(
+                        onPressed: _showBackgroundSelector,
+                        icon: const Icon(Icons.image),
+                        tooltip: 'Select Background',
+                      ),
+                      const SizedBox(width: 16),
+                      // Play/Pause button
                       IconButton.filled(
                         onPressed: () {
                           if (_playbackTimer?.isActive ?? false) {
@@ -265,6 +439,14 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
                               ? Icons.pause
                               : Icons.play_arrow,
                         ),
+                        tooltip: 'Play/Pause',
+                      ),
+                      const SizedBox(width: 16),
+                      // Mask selector button
+                      IconButton.filled(
+                        onPressed: _showMaskSelector,
+                        icon: const Icon(Icons.face),
+                        tooltip: 'Select Mask',
                       ),
                     ],
                   ),
