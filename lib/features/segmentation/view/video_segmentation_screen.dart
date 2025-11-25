@@ -27,6 +27,7 @@ class VideoSegmentationScreen extends StatefulWidget {
 class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
   VideoPlayerController? _videoController;
   List<String> _framePaths = [];
+  List<Uint8List> _frameBytes = [];
   int _currentFrameIndex = 0;
   bool _isProcessing = false;
   String? _statusMessage;
@@ -39,7 +40,8 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
   String? _selectedMask;
 
   // FPS control
-  static const int _targetFps = 30;
+  static const int _targetFps = 24;
+  static const int _inferenceStride = 2; // run inference every N frames
   static const Duration _frameDuration = Duration(
     milliseconds: 1000 ~/ _targetFps,
   );
@@ -114,9 +116,11 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
         return;
       }
 
-      // 2. Initialize video player for reference (optional, mostly for audio if needed)
+      // 2. Initialize video player for rendering (hardware-decoded texture)
       _videoController = VideoPlayerController.file(videoFile);
       await _videoController!.initialize();
+      await _videoController!.setLooping(true);
+      await _videoController!.play();
 
       // 3. Extract frames using FFmpeg
       final framesDir = Directory('${tempDir.path}/frames');
@@ -133,7 +137,7 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
         setState(() => _statusMessage = 'Extracting frames...');
         // Extract at 30fps, scale to 640 width (maintain aspect ratio) for performance
         final command =
-            '-i ${videoFile.path} -vf "fps=$_targetFps,scale=640:-1" ${framesDir.path}/frame_%04d.jpg';
+            '-i ${videoFile.path} -vf "fps=$_targetFps,scale=480:-1" ${framesDir.path}/frame_%04d.jpg';
         final session = await FFmpegKit.execute(command);
         final returnCode = await session.getReturnCode();
 
@@ -155,15 +159,14 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
               .toList()
             ..sort();
 
-      // 4. Precache frames
-      setState(() => _statusMessage = 'Precaching frames...');
+      // 4. Load frames for inference (bytes only to save memory)
+      setState(() => _statusMessage = 'Loading frames...');
       _precachedFrames = [];
+      _frameBytes = [];
       for (final path in _framePaths) {
         final file = File(path);
         final bytes = await file.readAsBytes();
-        final codec = await ui.instantiateImageCodec(bytes);
-        final frameInfo = await codec.getNextFrame();
-        _precachedFrames.add(frameInfo.image);
+        _frameBytes.add(bytes);
       }
 
       setState(() {
@@ -187,38 +190,26 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
   }
 
   Future<void> _processFrameLoop() async {
-    if (!mounted || !_isPlaying) return;
+    while (mounted && _isPlaying) {
+      final frameStart = DateTime.now();
 
-    final startTime = DateTime.now();
+      final shouldInfer =
+          _frameBytes.isNotEmpty &&
+          (_yolo != null || _poseYolo != null) &&
+          (_currentFrameIndex % _inferenceStride == 0);
+      if (shouldInfer) {
+        final frameBytes = _frameBytes[_currentFrameIndex];
+        await _runInference(frameBytes);
+      }
 
-    // 1. Update Display with Current Frame
-    if (_precachedFrames.isNotEmpty) {
-      setState(() {
-        _currentFrameImage = _precachedFrames[_currentFrameIndex];
-      });
-    }
+      final elapsed = DateTime.now().difference(frameStart);
+      final delay = _frameDuration - elapsed;
+      if (delay > Duration.zero) {
+        await Future.delayed(delay);
+      }
 
-    // 2. Run Inference (Synchronized)
-    if (_framePaths.isNotEmpty && (_yolo != null || _poseYolo != null)) {
-      final frameBytes = await File(
-        _framePaths[_currentFrameIndex],
-      ).readAsBytes();
-      await _runInference(frameBytes);
-    }
-
-    // 3. Wait for remainder of frame duration
-    final elapsed = DateTime.now().difference(startTime);
-    final delay = _frameDuration - elapsed;
-    if (delay > Duration.zero) {
-      await Future.delayed(delay);
-    }
-
-    // 4. Advance to next frame
-    if (mounted && _isPlaying) {
-      setState(() {
-        _currentFrameIndex = (_currentFrameIndex + 1) % _framePaths.length;
-      });
-      _processFrameLoop(); // Recursive call
+      if (!mounted || !_isPlaying) break;
+      _currentFrameIndex = (_currentFrameIndex + 1) % _framePaths.length;
     }
   }
 
@@ -257,19 +248,7 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
         poseDetections = _parsePoseDetections(
           Map<String, dynamic>.from(poseResult),
         );
-        if (poseDetections.isNotEmpty) {
-          debugPrint('Pose detected: ${poseDetections.length} people');
-          debugPrint('Keypoints: ${poseDetections.first.keypoints}');
-        } else {
-          debugPrint('No pose detected');
-        }
-      } else {
-        debugPrint('Pose result is null');
       }
-
-      debugPrint(
-        'Updating state with ${poseDetections.length} pose detections',
-      );
 
       if (mounted) {
         setState(() {
@@ -570,7 +549,14 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
           : Stack(
               fit: StackFit.expand,
               children: [
-                if (_currentFrameImage != null)
+                if (_videoController?.value.isInitialized ?? false)
+                  Center(
+                    child: AspectRatio(
+                      aspectRatio: _videoController!.value.aspectRatio,
+                      child: VideoPlayer(_videoController!),
+                    ),
+                  )
+                else if (_currentFrameImage != null)
                   CustomPaint(painter: _ImagePainter(_currentFrameImage!)),
                 // Overlay
                 if (_selectedBackground != null)

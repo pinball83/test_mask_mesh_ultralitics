@@ -116,6 +116,11 @@ class _SegmentationMaskPainter extends CustomPainter {
   final ui.Image? backgroundImage;
   final double maskSmoothing;
 
+  static final Paint _backgroundPaint = Paint()..color = Colors.black;
+  static final Paint _erasePaintBase = Paint()
+    ..blendMode = BlendMode.dstOut
+    ..isAntiAlias = true;
+
   @override
   void paint(Canvas canvas, Size size) {
     canvas.save();
@@ -155,8 +160,6 @@ class _SegmentationMaskPainter extends CustomPainter {
 
     // Draw the replacement background on an offscreen layer, then punch out
     // the subject area to reveal the camera feed underneath.
-    final backgroundPaint = Paint()
-      ..color = Colors.black; // fully opaque fallback
     canvas.saveLayer(Offset.zero & size, Paint());
     if (backgroundImage != null) {
       paintImage(
@@ -166,19 +169,14 @@ class _SegmentationMaskPainter extends CustomPainter {
         fit: BoxFit.cover,
       );
     } else {
-      canvas.drawRect(Offset.zero & size, backgroundPaint);
+      canvas.drawRect(Offset.zero & size, _backgroundPaint);
     }
 
     // Use dstOut to erase the background where the subject mask is present.
-    final erasePaint = Paint()
-      ..blendMode = BlendMode.dstOut
-      ..isAntiAlias = true;
-    if (maskSmoothing > 0) {
-      erasePaint.maskFilter = ui.MaskFilter.blur(
-        ui.BlurStyle.normal,
-        maskSmoothing,
-      );
-    }
+    final erasePaint = _erasePaintBase;
+    erasePaint.maskFilter = maskSmoothing > 0
+        ? ui.MaskFilter.blur(ui.BlurStyle.normal, maskSmoothing)
+        : null;
 
     for (final detection in detections) {
       final mask = detection.mask;
@@ -221,29 +219,76 @@ class _SegmentationMaskPainter extends CustomPainter {
         );
       }
 
-      for (var y = startY; y < endY; y++) {
-        final row = mask[y];
-        final mappedY = effectiveFlipV ? (maskHeight - 1 - y) : y;
-        final top = dy + mappedY * cellHeight;
-
-        for (var x = startX; x < endX; x++) {
-          final value = row[x];
-          if (value < maskThreshold) continue;
-
-          final mappedX = effectiveFlipH ? (maskWidth - 1 - x) : x;
-          final left = dx + mappedX * cellWidth;
-
-          canvas.drawRect(
-            Rect.fromLTWH(left, top, cellWidth, cellHeight),
-            erasePaint,
-          );
-        }
-      }
+      _drawAggregatedMaskRows(
+        canvas: canvas,
+        mask: mask,
+        maskWidth: maskWidth,
+        maskHeight: maskHeight,
+        startX: startX,
+        endX: endX,
+        startY: startY,
+        endY: endY,
+        cellWidth: cellWidth,
+        cellHeight: cellHeight,
+        dx: dx,
+        dy: dy,
+        threshold: maskThreshold,
+        flipH: effectiveFlipH,
+        flipV: effectiveFlipV,
+        paint: erasePaint,
+      );
     }
 
     // Composite the punched-out background over the camera feed.
     canvas.restore();
     canvas.restore();
+  }
+
+  void _drawAggregatedMaskRows({
+    required Canvas canvas,
+    required List<List<double>> mask,
+    required int maskWidth,
+    required int maskHeight,
+    required int startX,
+    required int endX,
+    required int startY,
+    required int endY,
+    required double cellWidth,
+    required double cellHeight,
+    required double dx,
+    required double dy,
+    required double threshold,
+    required bool flipH,
+    required bool flipV,
+    required Paint paint,
+  }) {
+    for (var y = startY; y < endY; y++) {
+      final row = mask[y];
+      final mappedY = flipV ? (maskHeight - 1 - y) : y;
+      final top = dy + mappedY * cellHeight;
+
+      var x = startX;
+      while (x < endX) {
+        if (row[x] < threshold) {
+          x++;
+          continue;
+        }
+
+        // Aggregate contiguous "on" cells to reduce draw calls
+        var runEnd = x + 1;
+        while (runEnd < endX && row[runEnd] >= threshold) {
+          runEnd++;
+        }
+
+        final drawStart = flipH ? (maskWidth - runEnd) : x;
+        final drawWidth = (runEnd - x) * cellWidth;
+        final left = dx + drawStart * cellWidth;
+
+        canvas.drawRect(Rect.fromLTWH(left, top, drawWidth, cellHeight), paint);
+
+        x = runEnd;
+      }
+    }
   }
 
   @override
