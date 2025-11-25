@@ -32,12 +32,17 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
   String? _statusMessage;
   List<YOLOResult> _currentDetections = [];
   ui.Image? _currentFrameImage;
+  bool _isInferring = false;
 
   // FPS control
   static const int _targetFps = 30;
   static const Duration _frameDuration = Duration(
     milliseconds: 1000 ~/ _targetFps,
   );
+
+  // Inference optimization: run inference every N frames
+  static const int _inferenceInterval = 2;
+  int _framesSinceLastInference = 0;
 
   YOLO? _yolo;
 
@@ -133,6 +138,7 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
   void _startPlayback() {
     _playbackTimer?.cancel();
     _currentFrameIndex = 0;
+    _framesSinceLastInference = 0;
     _playbackTimer = Timer.periodic(_frameDuration, (timer) {
       if (!mounted) {
         timer.cancel();
@@ -154,18 +160,49 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
     final frameInfo = await codec.getNextFrame();
     final image = frameInfo.image;
 
-    // Run inference
-    final result = await _yolo!.predict(frameBytes);
-    final detections = (result['detections'] as List)
-        .map((d) => YOLOResult.fromMap(d))
-        .toList();
-
+    // Update displayed frame immediately
     if (mounted) {
       setState(() {
         _currentFrameImage = image;
-        _currentDetections = detections;
+      });
+    }
+
+    // Run inference asynchronously, but only if:
+    // 1. No inference is currently running
+    // 2. It's time for inference (based on interval)
+    _framesSinceLastInference++;
+    if (!_isInferring && _framesSinceLastInference >= _inferenceInterval) {
+      _framesSinceLastInference = 0;
+      _isInferring = true;
+
+      // Run inference without blocking (fire and forget)
+      _runInferenceAsync(frameBytes);
+    }
+
+    // Advance to next frame
+    if (mounted) {
+      setState(() {
         _currentFrameIndex = (_currentFrameIndex + 1) % _framePaths.length;
       });
+    }
+  }
+
+  Future<void> _runInferenceAsync(Uint8List frameBytes) async {
+    try {
+      final result = await _yolo!.predict(frameBytes,confidenceThreshold: 0.75);
+      final detections = (result['detections'] as List)
+          .map((d) => YOLOResult.fromMap(d))
+          .toList();
+
+      if (mounted) {
+        setState(() {
+          _currentDetections = detections;
+        });
+      }
+    } catch (e) {
+      debugPrint('Inference error: $e');
+    } finally {
+      _isInferring = false;
     }
   }
 
@@ -202,9 +239,8 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
                 SegmentationOverlay(
                   detections: _currentDetections,
                   maskThreshold: 0.5,
-                  flipHorizontal:
-                      false, // Videos usually aren't mirrored like front camera
-                  flipVertical: false,
+                  flipHorizontal: false,
+                  flipVertical: true ,
                   backgroundAsset: 'assets/images/bg_image.jpg',
                 ),
                 // Controls

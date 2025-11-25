@@ -293,8 +293,7 @@ class _SimplePosePainter extends CustomPainter {
 
     // Apply calibrated offset to correct X-axis shift
     // The user observed a ~15px shift. This constant allows for clean adjustment.
-    const double xAxisCorrection = -15.0;
-    double screenX = normX * viewSize.width + xAxisCorrection;
+    double screenX = normX * viewSize.width;
     double screenY = normY * viewSize.height;
 
     // 3. Apply Flip

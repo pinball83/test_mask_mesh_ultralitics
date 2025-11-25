@@ -1,28 +1,44 @@
 PODS:
+  - ffmpeg_kit_min_gpl (6.0.3-LTS):
+    - ffmpeg_kit_min_gpl/min-gpl-lts (= 6.0.3-LTS)
+    - Flutter
+  - ffmpeg_kit_min_gpl/min-gpl-lts (6.0.3-LTS):
+    - Flutter
   - Flutter (1.0.0)
   - path_provider_foundation (0.0.1):
     - Flutter
     - FlutterMacOS
   - ultralytics_yolo (0.0.4):
     - Flutter
+  - video_player_avfoundation (0.0.1):
+    - Flutter
+    - FlutterMacOS
 
 DEPENDENCIES:
+  - ffmpeg_kit_min_gpl (from `.symlinks/plugins/ffmpeg_kit_min_gpl/ios`)
   - Flutter (from `Flutter`)
   - path_provider_foundation (from `.symlinks/plugins/path_provider_foundation/darwin`)
   - ultralytics_yolo (from `.symlinks/plugins/ultralytics_yolo/ios`)
+  - video_player_avfoundation (from `.symlinks/plugins/video_player_avfoundation/darwin`)
 
 EXTERNAL SOURCES:
+  ffmpeg_kit_min_gpl:
+    :path: ".symlinks/plugins/ffmpeg_kit_min_gpl/ios"
   Flutter:
     :path: Flutter
   path_provider_foundation:
     :path: ".symlinks/plugins/path_provider_foundation/darwin"
   ultralytics_yolo:
     :path: ".symlinks/plugins/ultralytics_yolo/ios"
+  video_player_avfoundation:
+    :path: ".symlinks/plugins/video_player_avfoundation/darwin"
 
 SPEC CHECKSUMS:
-  Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
+  ffmpeg_kit_min_gpl: 67e0314abb2647081c68b0d3d1b37dda4d2220b6
+  Flutter: e0871f40cf51350855a761d2e70bf5af5b9b5de7
   path_provider_foundation: 2b6b4c569c0fb62ec74538f866245ac84301af46
   ultralytics_yolo: c550236eb35c549df15ce6dfca979414d7b70248
+  video_player_avfoundation: 7c6c11d8470e1675df7397027218274b6d2360b3
 
 PODFILE CHECKSUM: 3c63482e143d1b91d2d2560aee9fb04ecc74ac7e
 
