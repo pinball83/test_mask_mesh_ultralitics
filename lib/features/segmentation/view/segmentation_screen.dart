@@ -4,6 +4,8 @@ import '../controller/segmentation_controller.dart';
 import '../widgets/segmentation_camera_view.dart';
 import '../widgets/segmentation_controls.dart';
 
+import 'video_segmentation_screen.dart';
+
 class SegmentationScreen extends StatefulWidget {
   const SegmentationScreen({super.key});
 
@@ -31,6 +33,23 @@ class _SegmentationScreenState extends State<SegmentationScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
+      appBar: AppBar(
+        title: const Text('Camera Segmentation'),
+        backgroundColor: Colors.black,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.video_library),
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) =>
+                      VideoSegmentationScreen(controller: _controller),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
       body: SafeArea(
         child: AnimatedBuilder(
           animation: _controller,
@@ -44,7 +63,7 @@ class _SegmentationScreenState extends State<SegmentationScreen> {
                 Expanded(
                   child: SegmentationCameraView(controller: _controller),
                 ),
-                 SegmentationControls(controller: _controller),
+                SegmentationControls(controller: _controller),
               ],
             );
           },
