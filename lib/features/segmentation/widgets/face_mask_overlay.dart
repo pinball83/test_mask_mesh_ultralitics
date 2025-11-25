@@ -37,7 +37,11 @@ class _FaceMaskOverlayState extends State<FaceMaskOverlay> {
   void didUpdateWidget(covariant FaceMaskOverlay oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.maskAsset != oldWidget.maskAsset) {
+      debugPrint('Mask asset changed: ${widget.maskAsset}');
       _resolveMaskImage();
+    }
+    if (widget.poseDetections != oldWidget.poseDetections) {
+      // debugPrint('Pose detections updated in overlay: ${widget.poseDetections.length}');
     }
   }
 
@@ -107,7 +111,22 @@ class _FaceMaskPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (poseDetections.isEmpty) return;
+    if (poseDetections.isEmpty) {
+      debugPrint('Painter: No pose detections');
+      return;
+    }
+
+    // Pose outputs arrive upside down from the single-image predictor; undo
+    // that with a vertical flip unless the caller explicitly disables it.
+    const poseSourceIsUpsideDown = true;
+    const poseSourceIsMirrored = false;
+    final effectiveFlipH = poseSourceIsMirrored
+        ? !flipHorizontal
+        : flipHorizontal;
+    final effectiveFlipV = poseSourceIsUpsideDown ^ flipVertical;
+    debugPrint(
+      'Painter: Painting mask for ${poseDetections.length} detections. MaskImage: ${maskImage.width}x${maskImage.height}',
+    );
 
     // Use the first detected person
     final detection = poseDetections.first;
@@ -115,11 +134,36 @@ class _FaceMaskPainter extends CustomPainter {
     if (keypoints == null || keypoints.isEmpty) return;
 
     // Map keypoints to screen coordinates
-    final nose = _mapPosePoint(detection, 0, size);
-    final leftEye = _mapPosePoint(detection, 1, size);
-    final rightEye = _mapPosePoint(detection, 2, size);
+    final nose = _mapPosePoint(
+      detection,
+      0,
+      size,
+      effectiveFlipH,
+      effectiveFlipV,
+    );
+    final leftEye = _mapPosePoint(
+      detection,
+      1,
+      size,
+      effectiveFlipH,
+      effectiveFlipV,
+    );
+    final rightEye = _mapPosePoint(
+      detection,
+      2,
+      size,
+      effectiveFlipH,
+      effectiveFlipV,
+    );
 
-    if (nose == null || leftEye == null || rightEye == null) return;
+    if (nose == null || leftEye == null || rightEye == null) {
+      debugPrint(
+        'Missing landmarks: nose=$nose, leftEye=$leftEye, rightEye=$rightEye',
+      );
+      return;
+    }
+
+    debugPrint('Drawing mask at nose: $nose');
 
     // Distance between eyes for scaling
     final eyeDist = sqrt(
@@ -140,11 +184,18 @@ class _FaceMaskPainter extends CustomPainter {
     // Translate to nose position (or slightly above for eyes)
     // Adjust Y offset based on mask type if needed, here we center on nose/eyes
     canvas.translate(nose.dx, nose.dy);
+    canvas.drawCircle(
+      Offset.zero,
+      6,
+      Paint()
+        ..color = Colors.redAccent
+        ..style = PaintingStyle.fill,
+    );
 
     // Rotate
     canvas.rotate(angle);
 
-    // Scale
+    // Scale (keep texture orientation; flips are handled in coordinate mapping)
     canvas.scale(scaleFactor);
 
     // Draw centered
@@ -157,7 +208,13 @@ class _FaceMaskPainter extends CustomPainter {
     canvas.restore();
   }
 
-  Offset? _mapPosePoint(YOLOResult detection, int index, Size viewSize) {
+  Offset? _mapPosePoint(
+    YOLOResult detection,
+    int index,
+    Size viewSize,
+    bool flipH,
+    bool flipV,
+  ) {
     final keypoints = detection.keypoints;
     if (keypoints == null || index < 0 || index >= keypoints.length) {
       return null;
@@ -166,36 +223,45 @@ class _FaceMaskPainter extends CustomPainter {
     final point = keypoints[index];
     if (!point.x.isFinite || !point.y.isFinite) return null;
 
-    if (detection.imageSize != null) {
-      final imageSize = detection.imageSize!;
+    double? imageW = detection.imageSize?.width;
+    double? imageH = detection.imageSize?.height;
 
-      // Calculate Aspect Fill scale and offset
-      final double scaleX = viewSize.width / imageSize.width;
-      final double scaleY = viewSize.height / imageSize.height;
-      final double scale = max(scaleX, scaleY);
+    if (imageW == null || imageH == null) {
+      final box = detection.boundingBox;
+      final nBox = detection.normalizedBox;
+      if (box.width <= 0 || nBox.width <= 0) return null;
 
-      final double scaledW = imageSize.width * scale;
-      final double scaledH = imageSize.height * scale;
-      final double dx = (viewSize.width - scaledW) / 2.0;
-      final double dy = (viewSize.height - scaledH) / 2.0;
-
-      double screenX = (point.x * scale) + dx;
-      double screenY = (point.y * scale) + dy;
-
-      if (flipHorizontal) {
-        screenX = viewSize.width - screenX;
-      }
-
-      // Vertical flip is handled by the coordinate system or caller
-      if (flipVertical) {
-        screenY = viewSize.height - screenY;
-      }
-
-      return Offset(screenX, screenY);
+      imageW = box.width / nBox.width;
+      imageH = box.height / nBox.height;
     }
 
-    // Fallback if imageSize is missing (shouldn't happen with correct YOLO setup)
-    return null;
+    // Keypoints arrive normalized (0..1). Convert to image pixel space when
+    // values look normalized; otherwise assume they are already in pixels.
+    var kpX = point.x;
+    var kpY = point.y;
+    if (kpX.abs() <= 1.2 && kpY.abs() <= 1.2) {
+      kpX = kpX * imageW;
+      kpY = kpY * imageH;
+    }
+
+    final scale = max(viewSize.width / imageW, viewSize.height / imageH);
+    final scaledW = imageW * scale;
+    final scaledH = imageH * scale;
+    final dx = (viewSize.width - scaledW) / 2.0;
+    final dy = (viewSize.height - scaledH) / 2.0;
+
+    double screenX = (kpX * scale) + dx;
+    double screenY = (kpY * scale) + dy;
+
+    if (flipH) {
+      screenX = viewSize.width - screenX;
+    }
+
+    if (flipV) {
+      screenY = viewSize.height - screenY;
+    }
+
+    return Offset(screenX, screenY);
   }
 
   @override

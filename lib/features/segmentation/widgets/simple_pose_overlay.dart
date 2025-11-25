@@ -236,69 +236,41 @@ class _SimplePosePainter extends CustomPainter {
     final point = keypoints[index];
     if (!point.x.isFinite || !point.y.isFinite) return null;
 
-    // Keypoints are likely in Model Input Coordinates (e.g. 640x640) with letterboxing.
-    // BoundingBox is in Image Coordinates.
-    // We need to transform Keypoints from Model Space to Image Space.
-
-    // New Logic: Use explicit Image Size if available
-    if (detection.imageSize != null) {
-      final imageSize = detection.imageSize!;
-
-      // Calculate Aspect Fill scale and offset
-      final double scaleX = viewSize.width / imageSize.width;
-      final double scaleY = viewSize.height / imageSize.height;
-      final double scale = max(scaleX, scaleY);
-
-      final double scaledW = imageSize.width * scale;
-      final double scaledH = imageSize.height * scale;
-      final double dx = (viewSize.width - scaledW) / 2.0;
-      final double dy = (viewSize.height - scaledH) / 2.0;
-
-      double screenX = (point.x * scale) + dx;
-      double screenY = (point.y * scale) + dy;
-
-      if (flipHorizontal) {
-        screenX = viewSize.width - screenX;
-      }
-
-      return _PosePoint(
-        imagePosition: Offset(screenX, screenY),
-        confidence: confidence,
-      );
+    double? imageW = detection.imageSize?.width;
+    double? imageH = detection.imageSize?.height;
+    if (imageW == null || imageH == null) {
+      final box = detection.boundingBox;
+      final nBox = detection.normalizedBox;
+      if (box.width <= 0 || nBox.width <= 0) return null;
+      imageW = box.width / nBox.width;
+      imageH = box.height / nBox.height;
     }
 
-    // Fallback Logic (Legacy)
-    final box = detection.boundingBox;
-    final nBox = detection.normalizedBox;
+    // Keypoints are reported normalized (0..1). Convert to image pixel space
+    // when values look normalized; otherwise assume pixel coordinates.
+    var kpX = point.x;
+    var kpY = point.y;
+    if (kpX.abs() <= 1.2 && kpY.abs() <= 1.2) {
+      kpX = kpX * imageW;
+      kpY = kpY * imageH;
+    }
 
-    if (box.width <= 0 || nBox.width <= 0) return null;
+    final scale = max(viewSize.width / imageW, viewSize.height / imageH);
+    final scaledW = imageW * scale;
+    final scaledH = imageH * scale;
+    final dx = (viewSize.width - scaledW) / 2.0;
+    final dy = (viewSize.height - scaledH) / 2.0;
 
-    // 1. Infer Image Size
-    final imgW = box.width / nBox.width;
-    final imgH = box.height / nBox.height;
-
-    // 2. Assume Model Input Size (Standard YOLO is 640)
-    final modelSize = modelInputSize;
-
-    // 3. Calculate Letterboxing parameters used by the model
-    final scale = modelSize / max(imgW, imgH);
-
-    // 4. Transform Keypoint (Model -> Image)
-    double imgX = (point.x) / scale;
-    double imgY = (point.y) / scale;
-
-    // 5. Normalize (Image -> 0..1)
-    double normX = imgX / imgW;
-    double normY = imgY / imgH;
-
-    // Apply calibrated offset to correct X-axis shift
-    // The user observed a ~15px shift. This constant allows for clean adjustment.
-    double screenX = normX * viewSize.width;
-    double screenY = normY * viewSize.height;
+    double screenX = (kpX * scale) + dx;
+    double screenY = (kpY * scale) + dy;
 
     // 3. Apply Flip
     if (flipHorizontal) {
       screenX = viewSize.width - screenX;
+    }
+
+    if (flipVertical) {
+      screenY = viewSize.height - screenY;
     }
 
     return _PosePoint(

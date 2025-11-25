@@ -28,14 +28,13 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
   VideoPlayerController? _videoController;
   List<String> _framePaths = [];
   int _currentFrameIndex = 0;
-  Timer? _playbackTimer;
   bool _isProcessing = false;
   String? _statusMessage;
 
   List<YOLOResult> _currentDetections = [];
   List<YOLOResult> _currentPoseDetections = [];
   ui.Image? _currentFrameImage;
-  bool _isInferring = false;
+  List<ui.Image> _precachedFrames = [];
   String? _selectedBackground = 'assets/images/bg_image.jpg';
   String? _selectedMask;
 
@@ -45,9 +44,7 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
     milliseconds: 1000 ~/ _targetFps,
   );
 
-  // Inference optimization: run inference every N frames
-  static const int _inferenceInterval = 2;
-  int _framesSinceLastInference = 0;
+  bool _isPlaying = false;
 
   YOLO? _yolo;
   YOLO? _poseYolo;
@@ -62,18 +59,32 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
   Future<void> _initializeYolo() async {
     final modelPath = widget.controller.modelPath;
     if (modelPath != null) {
-      _yolo = YOLO(modelPath: modelPath, task: YOLOTask.segment, useGpu: true);
+      _yolo = YOLO(
+        modelPath: modelPath,
+        task: YOLOTask.segment,
+        useGpu: true,
+        useMultiInstance: true,
+      );
       await _yolo!.loadModel();
     }
 
     final poseModelPath = widget.controller.poseModelPath;
+    debugPrint('Initializing Pose Model: $poseModelPath');
     if (poseModelPath != null) {
-      _poseYolo = YOLO(
-        modelPath: poseModelPath,
-        task: YOLOTask.pose,
-        useGpu: true,
-      );
-      await _poseYolo!.loadModel();
+      try {
+        _poseYolo = YOLO(
+          modelPath: poseModelPath,
+          task: YOLOTask.pose,
+          useGpu: true,
+          useMultiInstance: true,
+        );
+        await _poseYolo!.loadModel();
+        debugPrint('Pose Model loaded successfully');
+      } catch (e) {
+        debugPrint('Error loading Pose Model: $e');
+      }
+    } else {
+      debugPrint('Pose Model path is null');
     }
   }
 
@@ -108,41 +119,59 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
       await _videoController!.initialize();
 
       // 3. Extract frames using FFmpeg
-      setState(() => _statusMessage = 'Extracting frames...');
       final framesDir = Directory('${tempDir.path}/frames');
-      if (await framesDir.exists()) {
-        await framesDir.delete(recursive: true);
+      if (!await framesDir.exists()) {
+        await framesDir.create();
       }
-      await framesDir.create();
 
-      // Extract at 30fps, scale to 640 width (maintain aspect ratio) for performance
-      final command =
-          '-i ${videoFile.path} -vf "fps=$_targetFps,scale=640:-1" ${framesDir.path}/frame_%04d.jpg';
-      final session = await FFmpegKit.execute(command);
-      final returnCode = await session.getReturnCode();
+      final existingFiles = await framesDir.list().toList();
+      final hasFrames = existingFiles
+          .where((f) => f.path.endsWith('.jpg'))
+          .isNotEmpty;
 
-      if (ReturnCode.isSuccess(returnCode)) {
-        final files = await framesDir.list().toList();
-        _framePaths =
-            files
-                .whereType<File>()
-                .map((f) => f.path)
-                .where((p) => p.endsWith('.jpg'))
-                .toList()
-              ..sort();
+      if (!hasFrames) {
+        setState(() => _statusMessage = 'Extracting frames...');
+        // Extract at 30fps, scale to 640 width (maintain aspect ratio) for performance
+        final command =
+            '-i ${videoFile.path} -vf "fps=$_targetFps,scale=640:-1" ${framesDir.path}/frame_%04d.jpg';
+        final session = await FFmpegKit.execute(command);
+        final returnCode = await session.getReturnCode();
 
-        setState(() {
-          _isProcessing = false;
-          _statusMessage = null;
-        });
-
-        _startPlayback();
-      } else {
-        setState(() {
-          _isProcessing = false;
-          _statusMessage = 'Failed to extract frames';
-        });
+        if (!ReturnCode.isSuccess(returnCode)) {
+          setState(() {
+            _isProcessing = false;
+            _statusMessage = 'Failed to extract frames';
+          });
+          return;
+        }
       }
+
+      final files = await framesDir.list().toList();
+      _framePaths =
+          files
+              .whereType<File>()
+              .map((f) => f.path)
+              .where((p) => p.endsWith('.jpg'))
+              .toList()
+            ..sort();
+
+      // 4. Precache frames
+      setState(() => _statusMessage = 'Precaching frames...');
+      _precachedFrames = [];
+      for (final path in _framePaths) {
+        final file = File(path);
+        final bytes = await file.readAsBytes();
+        final codec = await ui.instantiateImageCodec(bytes);
+        final frameInfo = await codec.getNextFrame();
+        _precachedFrames.add(frameInfo.image);
+      }
+
+      setState(() {
+        _isProcessing = false;
+        _statusMessage = null;
+      });
+
+      _startPlayback();
     } catch (e) {
       setState(() {
         _isProcessing = false;
@@ -152,58 +181,48 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
   }
 
   void _startPlayback() {
-    _playbackTimer?.cancel();
+    _isPlaying = true;
     _currentFrameIndex = 0;
-    _framesSinceLastInference = 0;
-    _playbackTimer = Timer.periodic(_frameDuration, (timer) {
-      if (!mounted) {
-        timer.cancel();
-        return;
-      }
-      _processNextFrame();
-    });
+    _processFrameLoop();
   }
 
-  Future<void> _processNextFrame() async {
-    if (_framePaths.isEmpty || _yolo == null) return;
+  Future<void> _processFrameLoop() async {
+    if (!mounted || !_isPlaying) return;
 
-    final framePath = _framePaths[_currentFrameIndex];
-    final frameFile = File(framePath);
-    final frameBytes = await frameFile.readAsBytes();
+    final startTime = DateTime.now();
 
-    // Decode image for display
-    final codec = await ui.instantiateImageCodec(frameBytes);
-    final frameInfo = await codec.getNextFrame();
-    final image = frameInfo.image;
-
-    // Update displayed frame immediately
-    if (mounted) {
+    // 1. Update Display with Current Frame
+    if (_precachedFrames.isNotEmpty) {
       setState(() {
-        _currentFrameImage = image;
+        _currentFrameImage = _precachedFrames[_currentFrameIndex];
       });
     }
 
-    // Run inference asynchronously, but only if:
-    // 1. No inference is currently running
-    // 2. It's time for inference (based on interval)
-    _framesSinceLastInference++;
-    if (!_isInferring && _framesSinceLastInference >= _inferenceInterval) {
-      _framesSinceLastInference = 0;
-      _isInferring = true;
-
-      // Run inference without blocking (fire and forget)
-      _runInferenceAsync(frameBytes);
+    // 2. Run Inference (Synchronized)
+    if (_framePaths.isNotEmpty && (_yolo != null || _poseYolo != null)) {
+      final frameBytes = await File(
+        _framePaths[_currentFrameIndex],
+      ).readAsBytes();
+      await _runInference(frameBytes);
     }
 
-    // Advance to next frame
-    if (mounted) {
+    // 3. Wait for remainder of frame duration
+    final elapsed = DateTime.now().difference(startTime);
+    final delay = _frameDuration - elapsed;
+    if (delay > Duration.zero) {
+      await Future.delayed(delay);
+    }
+
+    // 4. Advance to next frame
+    if (mounted && _isPlaying) {
       setState(() {
         _currentFrameIndex = (_currentFrameIndex + 1) % _framePaths.length;
       });
+      _processFrameLoop(); // Recursive call
     }
   }
 
-  Future<void> _runInferenceAsync(Uint8List frameBytes) async {
+  Future<void> _runInference(Uint8List frameBytes) async {
     try {
       final futures = <Future<dynamic>>[];
 
@@ -226,18 +245,31 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
       final poseResult = results[1];
 
       List<YOLOResult> detections = [];
-      if (segResult != null) {
+      if (segResult is Map && segResult['detections'] is List) {
         detections = (segResult['detections'] as List)
-            .map((d) => YOLOResult.fromMap(d))
+            .whereType<Map<dynamic, dynamic>>()
+            .map((d) => YOLOResult.fromMap(Map<String, dynamic>.from(d)))
             .toList();
       }
 
       List<YOLOResult> poseDetections = [];
-      if (poseResult != null) {
-        poseDetections = (poseResult['detections'] as List)
-            .map((d) => YOLOResult.fromMap(d))
-            .toList();
+      if (poseResult is Map) {
+        poseDetections = _parsePoseDetections(
+          Map<String, dynamic>.from(poseResult),
+        );
+        if (poseDetections.isNotEmpty) {
+          debugPrint('Pose detected: ${poseDetections.length} people');
+          debugPrint('Keypoints: ${poseDetections.first.keypoints}');
+        } else {
+          debugPrint('No pose detected');
+        }
+      } else {
+        debugPrint('Pose result is null');
       }
+
+      debugPrint(
+        'Updating state with ${poseDetections.length} pose detections',
+      );
 
       if (mounted) {
         setState(() {
@@ -248,8 +280,95 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
     } catch (e) {
       debugPrint('Inference error: $e');
     } finally {
-      _isInferring = false;
+      // _isInferring = false; // No longer needed
     }
+  }
+
+  List<YOLOResult> _parsePoseDetections(Map<String, dynamic> poseResult) {
+    ui.Size? poseImageSize;
+    final poseSize = poseResult['imageSize'];
+    if (poseSize is Map) {
+      final w = poseSize['width'];
+      final h = poseSize['height'];
+      if (w is num && h is num) {
+        poseImageSize = ui.Size(w.toDouble(), h.toDouble());
+      }
+    }
+
+    final parsed = <YOLOResult>[];
+    final rawDetections = poseResult['detections'];
+    if (rawDetections is List) {
+      for (final detection in rawDetections.whereType<Map>()) {
+        final map = Map<String, dynamic>.from(detection);
+        if (poseImageSize != null) {
+          map['imageSize'] = {
+            'width': poseImageSize.width,
+            'height': poseImageSize.height,
+          };
+        }
+        parsed.add(YOLOResult.fromMap(map));
+      }
+    }
+    if (parsed.isNotEmpty) return parsed;
+
+    final boxes = poseResult['boxes'];
+    final keypoints = poseResult['keypoints'];
+    if (boxes is! List || keypoints is! List) return parsed;
+
+    final itemCount = boxes.length < keypoints.length
+        ? boxes.length
+        : keypoints.length;
+
+    for (var i = 0; i < itemCount; i++) {
+      final box = boxes[i];
+      final kp = keypoints[i];
+      if (box is! Map) continue;
+      final typedBox = Map<String, dynamic>.from(box);
+
+      final detectionMap = <String, dynamic>{
+        'classIndex': typedBox['classIndex'] ?? 0,
+        'className': typedBox['className'] ?? typedBox['class'] ?? '',
+        'confidence': (typedBox['confidence'] as num?)?.toDouble() ?? 0.0,
+        'boundingBox': {
+          'left': (typedBox['x1'] as num?)?.toDouble() ?? 0.0,
+          'top': (typedBox['y1'] as num?)?.toDouble() ?? 0.0,
+          'right': (typedBox['x2'] as num?)?.toDouble() ?? 0.0,
+          'bottom': (typedBox['y2'] as num?)?.toDouble() ?? 0.0,
+        },
+        'normalizedBox': {
+          'left': (typedBox['x1_norm'] as num?)?.toDouble() ?? 0.0,
+          'top': (typedBox['y1_norm'] as num?)?.toDouble() ?? 0.0,
+          'right': (typedBox['x2_norm'] as num?)?.toDouble() ?? 0.0,
+          'bottom': (typedBox['y2_norm'] as num?)?.toDouble() ?? 0.0,
+        },
+      };
+
+      if (poseImageSize != null) {
+        detectionMap['imageSize'] = {
+          'width': poseImageSize.width,
+          'height': poseImageSize.height,
+        };
+      }
+
+      if (kp is Map && kp['coordinates'] is List) {
+        final coords = (kp['coordinates'] as List).whereType<Map>().expand((
+          coord,
+        ) {
+          final coordMap = Map<String, dynamic>.from(coord);
+          final x = (coordMap['x'] as num?)?.toDouble() ?? 0.0;
+          final y = (coordMap['y'] as num?)?.toDouble() ?? 0.0;
+          final conf = (coordMap['confidence'] as num?)?.toDouble() ?? 0.0;
+          return [x, y, conf];
+        }).toList();
+        if (coords.isNotEmpty) {
+          detectionMap['keypoints'] = coords;
+        }
+      }
+
+      parsed.add(YOLOResult.fromMap(detectionMap));
+    }
+
+    return parsed;
   }
 
   void _showBackgroundSelector() async {
@@ -384,6 +503,7 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
                         setState(() {
                           _selectedMask = mask;
                         });
+                        debugPrint('Selected mask: $mask');
                         // Update modal state for selection border
                         setModalState(() {});
                       },
@@ -426,7 +546,7 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
   @override
   void dispose() {
     _videoController?.dispose();
-    _playbackTimer?.cancel();
+    _isPlaying = false;
     super.dispose();
   }
 
@@ -486,18 +606,14 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
                       // Play/Pause button
                       IconButton.filled(
                         onPressed: () {
-                          if (_playbackTimer?.isActive ?? false) {
-                            _playbackTimer?.cancel();
+                          if (_isPlaying) {
+                            _isPlaying = false;
                           } else {
                             _startPlayback();
                           }
                           setState(() {});
                         },
-                        icon: Icon(
-                          (_playbackTimer?.isActive ?? false)
-                              ? Icons.pause
-                              : Icons.play_arrow,
-                        ),
+                        icon: Icon(_isPlaying ? Icons.pause : Icons.play_arrow),
                         tooltip: 'Play/Pause',
                       ),
                       const SizedBox(width: 16),
