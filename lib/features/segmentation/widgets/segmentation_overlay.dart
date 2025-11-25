@@ -31,6 +31,7 @@ class _SegmentationOverlayState extends State<SegmentationOverlay> {
   ui.Image? _backgroundImage;
   ImageStream? _imageStream;
   ImageStreamListener? _imageStreamListener;
+  static const double _targetBackgroundWidth = 720.0;
 
   @override
   void initState() {
@@ -63,8 +64,12 @@ class _SegmentationOverlayState extends State<SegmentationOverlay> {
     final stream = imageProvider.resolve(ImageConfiguration.empty);
     _imageStream = stream;
     _imageStreamListener = ImageStreamListener((imageInfo, _) {
-      setState(() {
-        _backgroundImage = imageInfo.image;
+      final original = imageInfo.image;
+      _downscaleIfNeeded(original).then((scaled) {
+        if (!mounted) return;
+        setState(() {
+          _backgroundImage = scaled;
+        });
       });
     });
     stream.addListener(_imageStreamListener!);
@@ -76,6 +81,23 @@ class _SegmentationOverlayState extends State<SegmentationOverlay> {
     }
     _imageStream = null;
     _imageStreamListener = null;
+  }
+
+  Future<ui.Image> _downscaleIfNeeded(ui.Image image) async {
+    if (image.width <= _targetBackgroundWidth) return image;
+    final targetHeight = (image.height * (_targetBackgroundWidth / image.width))
+        .round();
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    final targetSize = Size(_targetBackgroundWidth, targetHeight.toDouble());
+    canvas.drawImageRect(
+      image,
+      Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()),
+      Rect.fromLTWH(0, 0, targetSize.width, targetSize.height),
+      Paint()..filterQuality = FilterQuality.low,
+    );
+    final picture = recorder.endRecording();
+    return picture.toImage(targetSize.width.round(), targetSize.height.round());
   }
 
   @override

@@ -29,19 +29,18 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
   List<String> _framePaths = [];
   List<Uint8List> _frameBytes = [];
   int _currentFrameIndex = 0;
+  bool _isInferring = false;
   bool _isProcessing = false;
   String? _statusMessage;
 
   List<YOLOResult> _currentDetections = [];
   List<YOLOResult> _currentPoseDetections = [];
-  ui.Image? _currentFrameImage;
-  List<ui.Image> _precachedFrames = [];
   String? _selectedBackground = 'assets/images/bg_image.jpg';
   String? _selectedMask;
 
   // FPS control
   static const int _targetFps = 24;
-  static const int _inferenceStride = 2; // run inference every N frames
+  static const int _inferenceStride = 3; // run inference every N frames
   static const Duration _frameDuration = Duration(
     milliseconds: 1000 ~/ _targetFps,
   );
@@ -137,7 +136,7 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
         setState(() => _statusMessage = 'Extracting frames...');
         // Extract at 30fps, scale to 640 width (maintain aspect ratio) for performance
         final command =
-            '-i ${videoFile.path} -vf "fps=$_targetFps,scale=480:-1" ${framesDir.path}/frame_%04d.jpg';
+            '-i ${videoFile.path} -vf "fps=$_targetFps,scale=360:-1" ${framesDir.path}/frame_%04d.jpg';
         final session = await FFmpegKit.execute(command);
         final returnCode = await session.getReturnCode();
 
@@ -161,7 +160,6 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
 
       // 4. Load frames for inference (bytes only to save memory)
       setState(() => _statusMessage = 'Loading frames...');
-      _precachedFrames = [];
       _frameBytes = [];
       for (final path in _framePaths) {
         final file = File(path);
@@ -196,10 +194,11 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
       final shouldInfer =
           _frameBytes.isNotEmpty &&
           (_yolo != null || _poseYolo != null) &&
-          (_currentFrameIndex % _inferenceStride == 0);
+          (_currentFrameIndex % _inferenceStride == 0) &&
+          !_isInferring;
       if (shouldInfer) {
         final frameBytes = _frameBytes[_currentFrameIndex];
-        await _runInference(frameBytes);
+        unawaited(_startInference(frameBytes));
       }
 
       final elapsed = DateTime.now().difference(frameStart);
@@ -210,6 +209,16 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
 
       if (!mounted || !_isPlaying) break;
       _currentFrameIndex = (_currentFrameIndex + 1) % _framePaths.length;
+    }
+  }
+
+  Future<void> _startInference(Uint8List frameBytes) async {
+    if (_isInferring) return;
+    _isInferring = true;
+    try {
+      await _runInference(frameBytes);
+    } finally {
+      _isInferring = false;
     }
   }
 
@@ -555,9 +564,7 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
                       aspectRatio: _videoController!.value.aspectRatio,
                       child: VideoPlayer(_videoController!),
                     ),
-                  )
-                else if (_currentFrameImage != null)
-                  CustomPaint(painter: _ImagePainter(_currentFrameImage!)),
+                  ),
                 // Overlay
                 if (_selectedBackground != null)
                   SegmentationOverlay(
