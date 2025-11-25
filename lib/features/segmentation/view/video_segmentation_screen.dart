@@ -31,6 +31,8 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
   int _currentFrameIndex = 0;
   bool _isInferring = false;
   bool _isProcessing = false;
+  bool _segModelReady = false;
+  bool _poseModelReady = false;
   String? _statusMessage;
 
   List<YOLOResult> _currentDetections = [];
@@ -40,10 +42,12 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
 
   // FPS control
   static const int _targetFps = 24;
-  static const int _inferenceStride = 3; // run inference every N frames
+  static const int _defaultInferenceStride = 4; // run inference every N frames
   static const Duration _frameDuration = Duration(
     milliseconds: 1000 ~/ _targetFps,
   );
+
+  int get _inferenceStride => Platform.isIOS ? 3 : _defaultInferenceStride;
 
   bool _isPlaying = false;
 
@@ -60,27 +64,39 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
   Future<void> _initializeYolo() async {
     final modelPath = widget.controller.modelPath;
     if (modelPath != null) {
-      _yolo = YOLO(
+      final seg = YOLO(
         modelPath: modelPath,
         task: YOLOTask.segment,
         useGpu: true,
         useMultiInstance: true,
       );
-      await _yolo!.loadModel();
+      try {
+        final loaded = await seg.loadModel();
+        if (loaded) {
+          _yolo = seg;
+          _segModelReady = true;
+        }
+      } catch (e) {
+        debugPrint('Error loading Segmentation Model: $e');
+      }
     }
 
     final poseModelPath = widget.controller.poseModelPath;
     debugPrint('Initializing Pose Model: $poseModelPath');
     if (poseModelPath != null) {
       try {
-        _poseYolo = YOLO(
+        final pose = YOLO(
           modelPath: poseModelPath,
           task: YOLOTask.pose,
           useGpu: true,
           useMultiInstance: true,
         );
-        await _poseYolo!.loadModel();
-        debugPrint('Pose Model loaded successfully');
+        final loaded = await pose.loadModel();
+        if (loaded) {
+          _poseYolo = pose;
+          _poseModelReady = true;
+          debugPrint('Pose Model loaded successfully');
+        }
       } catch (e) {
         debugPrint('Error loading Pose Model: $e');
       }
@@ -135,8 +151,9 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
       if (!hasFrames) {
         setState(() => _statusMessage = 'Extracting frames...');
         // Extract at 30fps, scale to 640 width (maintain aspect ratio) for performance
+        final scaledWidth = Platform.isIOS ? 480 : 360;
         final command =
-            '-i ${videoFile.path} -vf "fps=$_targetFps,scale=360:-1" ${framesDir.path}/frame_%04d.jpg';
+            '-i ${videoFile.path} -vf "fps=$_targetFps,scale=$scaledWidth:-1" ${framesDir.path}/frame_%04d.jpg';
         final session = await FFmpegKit.execute(command);
         final returnCode = await session.getReturnCode();
 
@@ -193,7 +210,7 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
 
       final shouldInfer =
           _frameBytes.isNotEmpty &&
-          (_yolo != null || _poseYolo != null) &&
+          (_segModelReady || _poseModelReady) &&
           (_currentFrameIndex % _inferenceStride == 0) &&
           !_isInferring;
       if (shouldInfer) {
@@ -227,14 +244,14 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
       final futures = <Future<dynamic>>[];
 
       // 1. Segmentation
-      if (_yolo != null) {
+      if (_segModelReady && _yolo != null) {
         futures.add(_yolo!.predict(frameBytes, confidenceThreshold: 0.75));
       } else {
         futures.add(Future.value(null));
       }
 
       // 2. Pose Detection
-      if (_poseYolo != null) {
+      if (_poseModelReady && _poseYolo != null) {
         futures.add(_poseYolo!.predict(frameBytes, confidenceThreshold: 0.5));
       } else {
         futures.add(Future.value(null));
@@ -569,7 +586,7 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
                 if (_selectedBackground != null)
                   SegmentationOverlay(
                     detections: _currentDetections,
-                    maskThreshold: 0.5,
+                    maskThreshold: Platform.isIOS ? 0.4 : 0.5,
                     flipHorizontal: false,
                     flipVertical: true,
                     backgroundAsset: _selectedBackground,
