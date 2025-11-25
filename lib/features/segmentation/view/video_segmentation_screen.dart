@@ -11,6 +11,7 @@ import 'package:ultralytics_yolo/ultralytics_yolo.dart';
 import 'package:video_player/video_player.dart';
 
 import '../controller/segmentation_controller.dart';
+import '../widgets/face_mask_overlay.dart';
 import '../widgets/segmentation_overlay.dart';
 
 class VideoSegmentationScreen extends StatefulWidget {
@@ -30,7 +31,9 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
   Timer? _playbackTimer;
   bool _isProcessing = false;
   String? _statusMessage;
+
   List<YOLOResult> _currentDetections = [];
+  List<YOLOResult> _currentPoseDetections = [];
   ui.Image? _currentFrameImage;
   bool _isInferring = false;
   String? _selectedBackground = 'assets/images/bg_image.jpg';
@@ -47,6 +50,7 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
   int _framesSinceLastInference = 0;
 
   YOLO? _yolo;
+  YOLO? _poseYolo;
 
   @override
   void initState() {
@@ -60,6 +64,16 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
     if (modelPath != null) {
       _yolo = YOLO(modelPath: modelPath, task: YOLOTask.segment, useGpu: true);
       await _yolo!.loadModel();
+    }
+
+    final poseModelPath = widget.controller.poseModelPath;
+    if (poseModelPath != null) {
+      _poseYolo = YOLO(
+        modelPath: poseModelPath,
+        task: YOLOTask.pose,
+        useGpu: true,
+      );
+      await _poseYolo!.loadModel();
     }
   }
 
@@ -191,17 +205,44 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
 
   Future<void> _runInferenceAsync(Uint8List frameBytes) async {
     try {
-      final result = await _yolo!.predict(
-        frameBytes,
-        confidenceThreshold: 0.75,
-      );
-      final detections = (result['detections'] as List)
-          .map((d) => YOLOResult.fromMap(d))
-          .toList();
+      final futures = <Future<dynamic>>[];
+
+      // 1. Segmentation
+      if (_yolo != null) {
+        futures.add(_yolo!.predict(frameBytes, confidenceThreshold: 0.75));
+      } else {
+        futures.add(Future.value(null));
+      }
+
+      // 2. Pose Detection
+      if (_poseYolo != null) {
+        futures.add(_poseYolo!.predict(frameBytes, confidenceThreshold: 0.5));
+      } else {
+        futures.add(Future.value(null));
+      }
+
+      final results = await Future.wait(futures);
+      final segResult = results[0];
+      final poseResult = results[1];
+
+      List<YOLOResult> detections = [];
+      if (segResult != null) {
+        detections = (segResult['detections'] as List)
+            .map((d) => YOLOResult.fromMap(d))
+            .toList();
+      }
+
+      List<YOLOResult> poseDetections = [];
+      if (poseResult != null) {
+        poseDetections = (poseResult['detections'] as List)
+            .map((d) => YOLOResult.fromMap(d))
+            .toList();
+      }
 
       if (mounted) {
         setState(() {
           _currentDetections = detections;
+          _currentPoseDetections = poseDetections;
         });
       }
     } catch (e) {
@@ -213,6 +254,7 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
 
   void _showBackgroundSelector() async {
     final backgrounds = [
+      null, // No background option
       'assets/images/bg_image.jpg',
       'assets/images/backgrounds/b_blur_on.png',
       'assets/images/backgrounds/b_bookshelf.jpeg',
@@ -276,7 +318,16 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
                         ),
                         child: ClipRRect(
                           borderRadius: BorderRadius.circular(8),
-                          child: Image.asset(bg, fit: BoxFit.cover),
+                          child: bg == null
+                              ? const Center(
+                                  child: Text(
+                                    'None',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                )
+                              : Image.asset(bg, fit: BoxFit.cover),
                         ),
                       ),
                     );
@@ -402,12 +453,20 @@ class _VideoSegmentationScreenState extends State<VideoSegmentationScreen> {
                 if (_currentFrameImage != null)
                   CustomPaint(painter: _ImagePainter(_currentFrameImage!)),
                 // Overlay
-                SegmentationOverlay(
-                  detections: _currentDetections,
-                  maskThreshold: 0.5,
+                if (_selectedBackground != null)
+                  SegmentationOverlay(
+                    detections: _currentDetections,
+                    maskThreshold: 0.5,
+                    flipHorizontal: false,
+                    flipVertical: true,
+                    backgroundAsset: _selectedBackground,
+                  ),
+                // Face Mask Overlay
+                FaceMaskOverlay(
+                  poseDetections: _currentPoseDetections,
+                  maskAsset: _selectedMask,
                   flipHorizontal: false,
                   flipVertical: true,
-                  backgroundAsset: _selectedBackground,
                 ),
                 // Controls
                 Positioned(
