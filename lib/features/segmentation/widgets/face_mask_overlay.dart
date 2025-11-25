@@ -172,20 +172,32 @@ class _FaceMaskPainter extends CustomPainter {
 
     // Rotation angle
     final angle = atan2(rightEye.dy - leftEye.dy, rightEye.dx - leftEye.dx);
+    const maskRotationOffset = pi; // rotate mask 180 degrees
+    final appliedAngle = angle + maskRotationOffset;
 
     // Scale factor (adjust multiplier as needed for mask size relative to face)
-    final scale = eyeDist * 4.0;
+    final scale = eyeDist * 4.5;
     final maskW = maskImage.width.toDouble();
     final maskH = maskImage.height.toDouble();
     final scaleFactor = scale / maskW;
+    final eyeMid = Offset(
+      (leftEye.dx + rightEye.dx) / 2,
+      (leftEye.dy + rightEye.dy) / 2,
+    );
+    // Shift anchor 10% left and 10% down relative to mask size to better fit
+    // face geometry.
+    final anchorPoint = Offset(
+      nose.dx - (maskW * scaleFactor * 0.05),
+      eyeMid.dy + (maskH * scaleFactor * 0.10),
+    );
 
     canvas.save();
 
-    // Translate to nose position (or slightly above for eyes)
-    // Adjust Y offset based on mask type if needed, here we center on nose/eyes
-    canvas.translate(nose.dx, nose.dy);
+    // Translate so mask center sits at the intersection of the eye line and
+    // the vertical line through the nose.
+    canvas.translate(anchorPoint.dx, anchorPoint.dy);
     canvas.drawCircle(
-      Offset.zero,
+      nose - anchorPoint,
       6,
       Paint()
         ..color = Colors.redAccent
@@ -193,7 +205,7 @@ class _FaceMaskPainter extends CustomPainter {
     );
 
     // Rotate
-    canvas.rotate(angle);
+    canvas.rotate(appliedAngle);
 
     // Scale (keep texture orientation; flips are handled in coordinate mapping)
     canvas.scale(scaleFactor);
