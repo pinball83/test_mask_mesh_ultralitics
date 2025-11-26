@@ -521,10 +521,9 @@ class _SimplePosePainter extends CustomPainter {
     final scale = targetWidth / img.width;
     final targetHeight = img.height * scale;
 
-    final dest = Rect.fromCenter(
-      center: center,
-      width: targetWidth,
-      height: targetHeight,
+    final angle = atan2(
+      rightEye.imagePosition.dy - leftEye.imagePosition.dy,
+      rightEye.imagePosition.dx - leftEye.imagePosition.dx,
     );
     final src = Rect.fromLTWH(
       0,
@@ -533,12 +532,21 @@ class _SimplePosePainter extends CustomPainter {
       img.height.toDouble(),
     );
 
+    canvas.save();
+    canvas.translate(center.dx, center.dy);
+    canvas.rotate(angle);
+    final dest = Rect.fromCenter(
+      center: Offset.zero,
+      width: targetWidth,
+      height: targetHeight,
+    );
     canvas.drawImageRect(
       img,
       src,
       dest,
       Paint()..filterQuality = FilterQuality.medium,
     );
+    canvas.restore();
   }
 
   // Resolve the source image size, preferring explicit imageSize and falling
