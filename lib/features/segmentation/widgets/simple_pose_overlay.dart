@@ -1,4 +1,5 @@
 import 'dart:math';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:ultralytics_yolo/models/yolo_result.dart';
@@ -10,12 +11,14 @@ class SimplePoseOverlay extends StatelessWidget {
     required this.flipHorizontal,
     required this.flipVertical,
     this.modelInputSize = 640.0,
+    this.maskAsset = 'assets/images/masks/m_cat.png',
   });
 
   final List<YOLOResult> poseDetections;
   final bool flipHorizontal;
   final bool flipVertical;
   final double modelInputSize;
+  final String maskAsset;
 
   @override
   Widget build(BuildContext context) {
@@ -23,39 +26,103 @@ class SimplePoseOverlay extends StatelessWidget {
       return const SizedBox.shrink();
     }
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final size = Size(constraints.maxWidth, constraints.maxHeight);
-        return Stack(
-          children: [
-            IgnorePointer(
-              child: CustomPaint(
-                painter: _SimplePosePainter(
-                  poseDetections: poseDetections,
-                  flipHorizontal: flipHorizontal,
-                  flipVertical: flipVertical,
-                  modelInputSize: modelInputSize,
-                ),
-                size: size,
-              ),
-            ),
-            if (poseDetections.isNotEmpty)
-              Positioned(
-                top: 50,
-                right: 10,
-                child: _DebugInfoOverlay(
-                  detection: poseDetections.first,
-                  viewSize: size,
-                  modelInputSize: modelInputSize,
-                  flipHorizontal: flipHorizontal,
-                  flipVertical: flipVertical,
+    return _MaskResolver(
+      maskAsset: maskAsset,
+      builder: (context, maskImage) => LayoutBuilder(
+        builder: (context, constraints) {
+          final size = Size(constraints.maxWidth, constraints.maxHeight);
+          return Stack(
+            children: [
+              IgnorePointer(
+                child: CustomPaint(
+                  painter: _SimplePosePainter(
+                    poseDetections: poseDetections,
+                    flipHorizontal: flipHorizontal,
+                    flipVertical: flipVertical,
+                    modelInputSize: modelInputSize,
+                    maskImage: maskImage,
+                  ),
+                  size: size,
                 ),
               ),
-          ],
-        );
-      },
+              if (poseDetections.isNotEmpty)
+                Positioned(
+                  top: 50,
+                  right: 10,
+                  child: _DebugInfoOverlay(
+                    detection: poseDetections.first,
+                    viewSize: size,
+                    modelInputSize: modelInputSize,
+                    flipHorizontal: flipHorizontal,
+                    flipVertical: flipVertical,
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
     );
   }
+}
+
+class _MaskResolver extends StatefulWidget {
+  const _MaskResolver({required this.maskAsset, required this.builder});
+
+  final String maskAsset;
+  final Widget Function(BuildContext, ui.Image?) builder;
+
+  @override
+  State<_MaskResolver> createState() => _MaskResolverState();
+}
+
+class _MaskResolverState extends State<_MaskResolver> {
+  ui.Image? _image;
+  ImageStream? _stream;
+  ImageStreamListener? _listener;
+
+  @override
+  void initState() {
+    super.initState();
+    _resolve();
+  }
+
+  @override
+  void didUpdateWidget(covariant _MaskResolver oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.maskAsset != widget.maskAsset) {
+      _resolve();
+    }
+  }
+
+  @override
+  void dispose() {
+    _disposeStream();
+    super.dispose();
+  }
+
+  void _resolve() {
+    _disposeStream();
+    final provider = AssetImage(widget.maskAsset);
+    final stream = provider.resolve(ImageConfiguration.empty);
+    _stream = stream;
+    _listener = ImageStreamListener((image, _) {
+      if (mounted) {
+        setState(() => _image = image.image);
+      }
+    });
+    stream.addListener(_listener!);
+  }
+
+  void _disposeStream() {
+    if (_stream != null && _listener != null) {
+      _stream!.removeListener(_listener!);
+    }
+    _stream = null;
+    _listener = null;
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.builder(context, _image);
 }
 
 class _DebugInfoOverlay extends StatelessWidget {
@@ -143,12 +210,14 @@ class _SimplePosePainter extends CustomPainter {
     required this.flipHorizontal,
     required this.flipVertical,
     required this.modelInputSize,
+    required this.maskImage,
   });
 
   final List<YOLOResult> poseDetections;
   final bool flipHorizontal;
   final bool flipVertical;
   final double modelInputSize;
+  final ui.Image? maskImage;
 
   // Confidence thresholds
   static const double _noseConfidence = 0.15;
@@ -175,7 +244,10 @@ class _SimplePosePainter extends CustomPainter {
 
     // Compute cover scale and offsets once per frame so boxes and keypoints
     // share the exact same mapping as the camera preview.
-    final scale = max(size.width / imageSize.width, size.height / imageSize.height);
+    final scale = max(
+      size.width / imageSize.width,
+      size.height / imageSize.height,
+    );
     final scaledW = imageSize.width * scale;
     final scaledH = imageSize.height * scale;
     final dx = (size.width - scaledW) / 2.0;
@@ -220,7 +292,8 @@ class _SimplePosePainter extends CustomPainter {
     double left = detection.normalizedBox.left * imageSize.width * scale + dx;
     double right = detection.normalizedBox.right * imageSize.width * scale + dx;
     double top = detection.normalizedBox.top * imageSize.height * scale + dy;
-    double bottom = detection.normalizedBox.bottom * imageSize.height * scale + dy;
+    double bottom =
+        detection.normalizedBox.bottom * imageSize.height * scale + dy;
 
     if (flipHorizontal) {
       final origLeft = left;
@@ -299,6 +372,14 @@ class _SimplePosePainter extends CustomPainter {
       );
     }
 
+    _drawMask(
+      canvas: canvas,
+      viewSize: viewSize,
+      nose: nose,
+      leftEye: leftEye,
+      rightEye: rightEye,
+    );
+
     _logDebugMapping(
       viewSize: viewSize,
       imageSize: imageSize,
@@ -338,10 +419,13 @@ class _SimplePosePainter extends CustomPainter {
     double y = point.y;
 
     // Build the view-space bounding box (post-flip) for containment checks.
-    double boxLeft = detection.normalizedBox.left * imageSize.width * scale + dx;
-    double boxRight = detection.normalizedBox.right * imageSize.width * scale + dx;
+    double boxLeft =
+        detection.normalizedBox.left * imageSize.width * scale + dx;
+    double boxRight =
+        detection.normalizedBox.right * imageSize.width * scale + dx;
     double boxTop = detection.normalizedBox.top * imageSize.height * scale + dy;
-    double boxBottom = detection.normalizedBox.bottom * imageSize.height * scale + dy;
+    double boxBottom =
+        detection.normalizedBox.bottom * imageSize.height * scale + dy;
     if (flipHorizontal) {
       final origLeft = boxLeft;
       boxLeft = viewSize.width - boxRight;
@@ -376,8 +460,14 @@ class _SimplePosePainter extends CustomPainter {
     Offset? candidate2;
     double cand2Dist = double.infinity;
     if (x >= 0.0 && x <= 1.2 && y >= 0.0 && y <= 1.2) {
-      double bx = (detection.normalizedBox.left + x.clamp(0.0, 1.0) * detection.normalizedBox.width) * imageSize.width;
-      double by = (detection.normalizedBox.top + y.clamp(0.0, 1.0) * detection.normalizedBox.height) * imageSize.height;
+      double bx =
+          (detection.normalizedBox.left +
+              x.clamp(0.0, 1.0) * detection.normalizedBox.width) *
+          imageSize.width;
+      double by =
+          (detection.normalizedBox.top +
+              y.clamp(0.0, 1.0) * detection.normalizedBox.height) *
+          imageSize.height;
       bx = (bx * scale) + dx;
       by = (by * scale) + dy;
       if (flipHorizontal) bx = viewSize.width - bx;
@@ -393,12 +483,64 @@ class _SimplePosePainter extends CustomPainter {
     } else if (candidate2 != null && viewBox.contains(candidate2)) {
       chosen = candidate2;
     } else {
-      chosen = (cand2Dist < cand1Dist && candidate2 != null) ? candidate2 : candidate1!;
+      chosen = (cand2Dist < cand1Dist && candidate2 != null)
+          ? candidate2
+          : candidate1!;
     }
 
-    return _PosePoint(
-      imagePosition: chosen,
-      confidence: confidence,
+    return _PosePoint(imagePosition: chosen, confidence: confidence);
+  }
+
+  void _drawMask({
+    required Canvas canvas,
+    required Size viewSize,
+    _PosePoint? nose,
+    _PosePoint? leftEye,
+    _PosePoint? rightEye,
+  }) {
+    if (maskImage == null ||
+        nose == null ||
+        leftEye == null ||
+        rightEye == null ||
+        nose.confidence < _noseConfidence ||
+        leftEye.confidence < _eyeConfidence ||
+        rightEye.confidence < _eyeConfidence) {
+      return;
+    }
+
+    final center = Offset(
+      nose.imagePosition.dx,
+      (leftEye.imagePosition.dy + rightEye.imagePosition.dy) / 2,
+    );
+
+    final eyeDistance =
+        (leftEye.imagePosition - rightEye.imagePosition).distance;
+    if (!eyeDistance.isFinite || eyeDistance <= 0) return;
+
+    final img = maskImage!;
+    final targetWidth = (eyeDistance * 5.0)
+        .clamp(viewSize.width * 0.15, viewSize.width * 0.9)
+        .toDouble();
+    final scale = targetWidth / img.width;
+    final targetHeight = img.height * scale;
+
+    final dest = Rect.fromCenter(
+      center: center,
+      width: targetWidth,
+      height: targetHeight,
+    );
+    final src = Rect.fromLTWH(
+      0,
+      0,
+      img.width.toDouble(),
+      img.height.toDouble(),
+    );
+
+    canvas.drawImageRect(
+      img,
+      src,
+      dest,
+      Paint()..filterQuality = FilterQuality.medium,
     );
   }
 
@@ -470,7 +612,8 @@ class _SimplePosePainter extends CustomPainter {
   bool shouldRepaint(covariant _SimplePosePainter oldDelegate) {
     return oldDelegate.poseDetections != poseDetections ||
         oldDelegate.flipHorizontal != flipHorizontal ||
-        oldDelegate.flipVertical != flipVertical;
+        oldDelegate.flipVertical != flipVertical ||
+        oldDelegate.maskImage != maskImage;
   }
 }
 
