@@ -1,3 +1,5 @@
+import 'dart:io';
+import 'dart:io' show Platform;
 import 'dart:math';
 import 'dart:ui' as ui;
 
@@ -219,6 +221,13 @@ class _SimplePosePainter extends CustomPainter {
   final double modelInputSize;
   final ui.Image? maskImage;
 
+  // On iOS the preview is already mirrored, so skip position flips there to
+  // avoid moving overlays in the opposite direction while still honoring flips
+  // for rotation/mirroring detection.
+  bool get _posFlipH => Platform.isIOS ? true : flipHorizontal;
+  bool get _posFlipV => Platform.isIOS ? false : flipVertical;
+  bool get _mirrorForRotation => flipHorizontal ^ flipVertical;
+
   // Confidence thresholds
   static const double _noseConfidence = 0.15;
   static const double _eyeConfidence = 0.25;
@@ -228,13 +237,6 @@ class _SimplePosePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     if (size.isEmpty) return;
-
-    // Draw fat orange border for debugging
-    final borderPaint = Paint()
-      ..color = Colors.orange
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 10.0;
-    // canvas.drawRect(Offset.zero & size, borderPaint);
 
     final poseDetection = _pickPrimaryPose(poseDetections, size);
     if (poseDetection == null) return;
@@ -295,12 +297,12 @@ class _SimplePosePainter extends CustomPainter {
     double bottom =
         detection.normalizedBox.bottom * imageSize.height * scale + dy;
 
-    if (flipHorizontal) {
+    if (_posFlipH) {
       final origLeft = left;
       left = viewSize.width - right;
       right = viewSize.width - origLeft;
     }
-    if (flipVertical) {
+    if (_posFlipV) {
       final origTop = top;
       top = viewSize.height - bottom;
       bottom = viewSize.height - origTop;
@@ -426,12 +428,12 @@ class _SimplePosePainter extends CustomPainter {
     double boxTop = detection.normalizedBox.top * imageSize.height * scale + dy;
     double boxBottom =
         detection.normalizedBox.bottom * imageSize.height * scale + dy;
-    if (flipHorizontal) {
+    if (_posFlipH) {
       final origLeft = boxLeft;
       boxLeft = viewSize.width - boxRight;
       boxRight = viewSize.width - origLeft;
     }
-    if (flipVertical) {
+    if (_posFlipV) {
       final origTop = boxTop;
       boxTop = viewSize.height - boxBottom;
       boxBottom = viewSize.height - origTop;
@@ -450,8 +452,8 @@ class _SimplePosePainter extends CustomPainter {
     }
     cx1 = (cx1 * scale) + dx;
     cy1 = (cy1 * scale) + dy;
-    if (flipHorizontal) cx1 = viewSize.width - cx1;
-    if (flipVertical) cy1 = viewSize.height - cy1;
+    if (_posFlipH) cx1 = viewSize.width - cx1;
+    if (_posFlipV) cy1 = viewSize.height - cy1;
     candidate1 = Offset(cx1, cy1);
     cand1Dist = (candidate1 - boxCenter).distanceSquared;
 
@@ -470,8 +472,8 @@ class _SimplePosePainter extends CustomPainter {
           imageSize.height;
       bx = (bx * scale) + dx;
       by = (by * scale) + dy;
-      if (flipHorizontal) bx = viewSize.width - bx;
-      if (flipVertical) by = viewSize.height - by;
+      if (_posFlipH) bx = viewSize.width - bx;
+      if (_posFlipV) by = viewSize.height - by;
       candidate2 = Offset(bx, by);
       cand2Dist = (candidate2 - boxCenter).distanceSquared;
     }
@@ -521,10 +523,11 @@ class _SimplePosePainter extends CustomPainter {
     final scale = targetWidth / img.width;
     final targetHeight = img.height * scale;
 
-    final angle = atan2(
+    var angle = atan2(
       rightEye.imagePosition.dy - leftEye.imagePosition.dy,
       rightEye.imagePosition.dx - leftEye.imagePosition.dx,
     );
+
     final src = Rect.fromLTWH(
       0,
       0,
@@ -608,7 +611,7 @@ class _SimplePosePainter extends CustomPainter {
         if (rightEye != null)
           'rEye=${rightEye.imagePosition.dx.toStringAsFixed(1)},${rightEye.imagePosition.dy.toStringAsFixed(1)} '
               'conf=${rightEye.confidence.toStringAsFixed(2)}',
-        'flips: H=$flipHorizontal V=$flipVertical',
+        'flips: H=$_posFlipH V=$_posFlipV rotMirror=$_mirrorForRotation',
       ].join(' | '),
     );
   }
