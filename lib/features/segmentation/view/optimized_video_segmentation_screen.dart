@@ -7,6 +7,7 @@ import 'package:video_player/video_player.dart';
 import '../controller/optimized_video_segmentation_controller.dart';
 import '../widgets/cached_segmentation_overlay.dart';
 import '../widgets/cached_face_mask_overlay.dart';
+import '../widgets/debug_mask_overlay.dart';
 
 class OptimizedVideoSegmentationScreen extends StatefulWidget {
   const OptimizedVideoSegmentationScreen({super.key});
@@ -153,6 +154,24 @@ class _OptimizedVideoSegmentationScreenState
             ),
           ),
 
+          // Debug: raw mask overlay (tinted)
+          // Positioned.fill(
+          //   child: ListenableBuilder(
+          //     listenable: _controller,
+          //     builder: (context, child) {
+          //       return DebugMaskOverlay(
+          //         detections: _controller.currentDetections,
+          //         maskThreshold: 0.5,
+          //         flipHorizontal: false,
+          //         flipVertical: false,
+          //         maskSourceIsUpsideDown: false,
+          //         color: Colors.cyan,
+          //         opacity: 0.20,
+          //       );
+          //     },
+          //   ),
+          // ),
+
           // Face mask overlay
           Positioned.fill(
             child: ListenableBuilder(
@@ -160,11 +179,11 @@ class _OptimizedVideoSegmentationScreenState
               builder: (context, child) {
                 return CachedFaceMaskOverlay(
                   poseDetections: _controller.currentPoseDetections,
-                  maskAsset: 'assets/masks/m_cat.png',
+                  maskAsset: 'assets/images/masks/m_cat.png',
                   flipHorizontal: false,
                   flipVertical: false,
                   opacity: 0.7,
-                  poseSourceIsUpsideDown: true,
+                  poseSourceIsUpsideDown: false,
                   maskRotationOffset: 3.141592653589793,
                 );
               },

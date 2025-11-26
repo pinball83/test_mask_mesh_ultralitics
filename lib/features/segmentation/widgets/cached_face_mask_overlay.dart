@@ -112,9 +112,9 @@ class _CachedFaceMaskOverlayState extends State<CachedFaceMaskOverlay> {
     if (keypoints == null || keypoints.length < 3) return '';
     
     // Create cache key based on keypoint positions and mask asset
-    final nosePos = '${keypoints[0].x.toStringAsFixed(2)}_${keypoints[0].y.toStringAsFixed(2)}';
-    final leftEyePos = '${keypoints[1].x.toStringAsFixed(2)}_${keypoints[1].y.toStringAsFixed(2)}';
-    final rightEyePos = '${keypoints[2].x.toStringAsFixed(2)}_${keypoints[2].y.toStringAsFixed(2)}';
+    final nosePos = '${keypoints[0].x.toStringAsFixed(3)}_${keypoints[0].y.toStringAsFixed(3)}';
+    final leftEyePos = '${keypoints[1].x.toStringAsFixed(3)}_${keypoints[1].y.toStringAsFixed(3)}';
+    final rightEyePos = '${keypoints[2].x.toStringAsFixed(3)}_${keypoints[2].y.toStringAsFixed(3)}';
     final params = [
       widget.maskAsset,
       widget.flipHorizontal,
@@ -184,15 +184,12 @@ class _CachedFaceMaskPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    // If we have a cached picture for the computed/last key, draw it first
-    if (cacheKey.isNotEmpty && pictureCache.containsKey(cacheKey)) {
-      final cachedPicture = pictureCache[cacheKey]!;
-      canvas.drawPicture(cachedPicture);
-      return; // Draw cached and exit for speed
-    }
-
+    // When no detections, try drawing last cached picture
     if (poseDetections.isEmpty) {
-      // No detections and no cache to reuse
+      if (cacheKey.isNotEmpty && pictureCache.containsKey(cacheKey)) {
+        final cached = pictureCache[cacheKey]!;
+        canvas.drawPicture(cached);
+      }
       return;
     }
 
@@ -281,18 +278,21 @@ class _CachedFaceMaskPainter extends CustomPainter {
     canvas.rotate(appliedAngle);
     canvas.scale(scaleFactor);
 
-    // Draw mask with optimized quality
-    final paint = Paint()
-      ..filterQuality = FilterQuality.low
-      ..isAntiAlias = true
-      ..blendMode = BlendMode.modulate
-      ..color = Color.fromRGBO(255, 255, 255, opacity);
-
+    // Draw mask with proper opacity using a layer + srcIn
+    final maskRect = Rect.fromLTWH(-maskW / 2, -maskH / 2, maskW, maskH);
+    canvas.saveLayer(maskRect, Paint());
     canvas.drawImage(
       maskImage,
       Offset(-maskW / 2, -maskH / 2),
-      paint,
+      Paint()
+        ..filterQuality = FilterQuality.low
+        ..isAntiAlias = true,
     );
+    final fade = Paint()
+      ..blendMode = BlendMode.srcIn
+      ..color = Colors.white.withOpacity(opacity);
+    canvas.drawRect(maskRect, fade);
+    canvas.restore();
 
     canvas.restore();
   }

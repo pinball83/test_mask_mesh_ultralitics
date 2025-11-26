@@ -47,7 +47,7 @@ class FrameProcessingService {
   static const Duration frameInterval = Duration(milliseconds: 1000 ~/ targetFps);
   // Throttling/strides
   int segmentationStride = 2; // run segmentation every Nth frame
-  int poseStride = 6; // run pose every Nth frame
+  int poseStride = 1; // run pose every frame for best face tracking
 
   Stream<SegmentationResult> get segmentationStream => _segmentationController.stream;
   Stream<PoseResult> get poseStream => _poseController.stream;

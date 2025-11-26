@@ -1,12 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:test_mask_mesh_ultralitics/features/segmentation/controller/optimized_video_segmentation_controller.dart';
 import 'package:test_mask_mesh_ultralitics/features/segmentation/view/optimized_video_segmentation_screen.dart';
 
 import '../controller/segmentation_controller.dart';
 import '../widgets/segmentation_camera_view.dart';
 import '../widgets/segmentation_controls.dart';
-
-import 'video_segmentation_screen.dart';
 
 class SegmentationScreen extends StatefulWidget {
   const SegmentationScreen({super.key});

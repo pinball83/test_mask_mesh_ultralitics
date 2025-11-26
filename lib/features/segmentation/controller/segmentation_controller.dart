@@ -50,16 +50,14 @@ class SegmentationController extends ChangeNotifier {
     includeDetections: false,
     includeClassifications: false,
     includeProcessingTimeMs: false,
-    includeFps: false,
+    includeFps: true,
     includeMasks: true,
     includePoses: true,
     includeOBB: false,
     includeOriginalImage: false,
-    // Ensure max FPS by setting these to null
-    maxFPS: 30,
+    maxFPS: 24,
     throttleInterval: null,
-    inferenceFrequency: null,
-    skipFrames: 3,
+    inferenceFrequency: null, // disable time-based multi-model frequency control
   );
 
   bool get isLoading => _isLoading;
