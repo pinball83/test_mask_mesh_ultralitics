@@ -153,6 +153,8 @@ class _SimplePosePainter extends CustomPainter {
   // Confidence thresholds
   static const double _noseConfidence = 0.15;
   static const double _eyeConfidence = 0.25;
+  static const int _logThrottleMs = 350;
+  static DateTime? _lastLog;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -168,24 +170,68 @@ class _SimplePosePainter extends CustomPainter {
     final poseDetection = _pickPrimaryPose(poseDetections, size);
     if (poseDetection == null) return;
 
+    final imageSize = _resolveImageSize(poseDetection);
+    if (imageSize == null) return;
+
+    // Compute cover scale and offsets once per frame so boxes and keypoints
+    // share the exact same mapping as the camera preview.
+    final scale = max(size.width / imageSize.width, size.height / imageSize.height);
+    final scaledW = imageSize.width * scale;
+    final scaledH = imageSize.height * scale;
+    final dx = (size.width - scaledW) / 2.0;
+    final dy = (size.height - scaledH) / 2.0;
+
     // Draw blue bounding box
-    _drawBoundingBox(canvas, poseDetection, size);
+    _drawBoundingBox(
+      canvas,
+      poseDetection,
+      size,
+      scale: scale,
+      dx: dx,
+      dy: dy,
+      imageSize: imageSize,
+    );
 
     // Draw landmarks
-    _drawLandmarks(canvas, poseDetection, size);
+    _drawLandmarks(
+      canvas,
+      poseDetection,
+      size,
+      scale: scale,
+      dx: dx,
+      dy: dy,
+      imageSize: imageSize,
+    );
   }
 
   YOLOResult? _pickPrimaryPose(List<YOLOResult> list, Size size) {
     return list.first;
   }
 
-  void _drawBoundingBox(Canvas canvas, YOLOResult detection, Size viewSize) {
-    final nBox = detection.normalizedBox;
+  void _drawBoundingBox(
+    Canvas canvas,
+    YOLOResult detection,
+    Size viewSize, {
+    required double scale,
+    required double dx,
+    required double dy,
+    required Size imageSize,
+  }) {
+    double left = detection.normalizedBox.left * imageSize.width * scale + dx;
+    double right = detection.normalizedBox.right * imageSize.width * scale + dx;
+    double top = detection.normalizedBox.top * imageSize.height * scale + dy;
+    double bottom = detection.normalizedBox.bottom * imageSize.height * scale + dy;
 
-    var left = nBox.left * viewSize.width;
-    var top = nBox.top * viewSize.height;
-    var right = nBox.right * viewSize.width;
-    var bottom = nBox.bottom * viewSize.height;
+    if (flipHorizontal) {
+      final origLeft = left;
+      left = viewSize.width - right;
+      right = viewSize.width - origLeft;
+    }
+    if (flipVertical) {
+      final origTop = top;
+      top = viewSize.height - bottom;
+      bottom = viewSize.height - origTop;
+    }
 
     final rect = Rect.fromLTRB(left, top, right, bottom);
     final boxPaint = Paint()
@@ -195,13 +241,45 @@ class _SimplePosePainter extends CustomPainter {
     canvas.drawRect(rect, boxPaint);
   }
 
-  void _drawLandmarks(Canvas canvas, YOLOResult detection, Size viewSize) {
+  void _drawLandmarks(
+    Canvas canvas,
+    YOLOResult detection,
+    Size viewSize, {
+    required double scale,
+    required double dx,
+    required double dy,
+    required Size imageSize,
+  }) {
     final keypoints = detection.keypoints;
     if (keypoints == null || keypoints.isEmpty) return;
 
-    final nose = _mapPosePoint(detection, 0, viewSize);
-    final leftEye = _mapPosePoint(detection, 1, viewSize);
-    final rightEye = _mapPosePoint(detection, 2, viewSize);
+    final nose = _mapPosePoint(
+      detection: detection,
+      index: 0,
+      viewSize: viewSize,
+      scale: scale,
+      dx: dx,
+      dy: dy,
+      imageSize: imageSize,
+    );
+    final leftEye = _mapPosePoint(
+      detection: detection,
+      index: 1,
+      viewSize: viewSize,
+      scale: scale,
+      dx: dx,
+      dy: dy,
+      imageSize: imageSize,
+    );
+    final rightEye = _mapPosePoint(
+      detection: detection,
+      index: 2,
+      viewSize: viewSize,
+      scale: scale,
+      dx: dx,
+      dy: dy,
+      imageSize: imageSize,
+    );
 
     if (nose != null && nose.confidence >= _noseConfidence) {
       canvas.drawCircle(nose.imagePosition, 8.0, Paint()..color = Colors.red);
@@ -220,9 +298,29 @@ class _SimplePosePainter extends CustomPainter {
         Paint()..color = Colors.blue,
       );
     }
+
+    _logDebugMapping(
+      viewSize: viewSize,
+      imageSize: imageSize,
+      scale: scale,
+      dx: dx,
+      dy: dy,
+      detection: detection,
+      nose: nose,
+      leftEye: leftEye,
+      rightEye: rightEye,
+    );
   }
 
-  _PosePoint? _mapPosePoint(YOLOResult detection, int index, Size viewSize) {
+  _PosePoint? _mapPosePoint({
+    required YOLOResult detection,
+    required int index,
+    required Size viewSize,
+    required double scale,
+    required double dx,
+    required double dy,
+    required Size imageSize,
+  }) {
     final keypoints = detection.keypoints;
     final confidences = detection.keypointConfidences;
     if (keypoints == null || index < 0 || index >= keypoints.length) {
@@ -236,46 +334,135 @@ class _SimplePosePainter extends CustomPainter {
     final point = keypoints[index];
     if (!point.x.isFinite || !point.y.isFinite) return null;
 
-    double? imageW = detection.imageSize?.width;
-    double? imageH = detection.imageSize?.height;
-    if (imageW == null || imageH == null) {
-      final box = detection.boundingBox;
-      final nBox = detection.normalizedBox;
-      if (box.width <= 0 || nBox.width <= 0) return null;
-      imageW = box.width / nBox.width;
-      imageH = box.height / nBox.height;
-    }
+    double x = point.x;
+    double y = point.y;
 
-    // Keypoints are reported normalized (0..1). Convert to image pixel space
-    // when values look normalized; otherwise assume pixel coordinates.
-    var kpX = point.x;
-    var kpY = point.y;
-    if (kpX.abs() <= 1.2 && kpY.abs() <= 1.2) {
-      kpX = kpX * imageW;
-      kpY = kpY * imageH;
-    }
-
-    final scale = max(viewSize.width / imageW, viewSize.height / imageH);
-    final scaledW = imageW * scale;
-    final scaledH = imageH * scale;
-    final dx = (viewSize.width - scaledW) / 2.0;
-    final dy = (viewSize.height - scaledH) / 2.0;
-
-    double screenX = (kpX * scale) + dx;
-    double screenY = (kpY * scale) + dy;
-
-    // 3. Apply Flip
+    // Build the view-space bounding box (post-flip) for containment checks.
+    double boxLeft = detection.normalizedBox.left * imageSize.width * scale + dx;
+    double boxRight = detection.normalizedBox.right * imageSize.width * scale + dx;
+    double boxTop = detection.normalizedBox.top * imageSize.height * scale + dy;
+    double boxBottom = detection.normalizedBox.bottom * imageSize.height * scale + dy;
     if (flipHorizontal) {
-      screenX = viewSize.width - screenX;
+      final origLeft = boxLeft;
+      boxLeft = viewSize.width - boxRight;
+      boxRight = viewSize.width - origLeft;
+    }
+    if (flipVertical) {
+      final origTop = boxTop;
+      boxTop = viewSize.height - boxBottom;
+      boxBottom = viewSize.height - origTop;
+    }
+    final viewBox = Rect.fromLTRB(boxLeft, boxTop, boxRight, boxBottom);
+    final boxCenter = viewBox.center;
+
+    // Candidate 1: assume full-image normalized keypoints.
+    Offset? candidate1;
+    double cand1Dist = double.infinity;
+    double cx1 = x;
+    double cy1 = y;
+    if (x >= 0.0 && x <= 1.2 && y >= 0.0 && y <= 1.2) {
+      cx1 = x.clamp(0.0, 1.0) * imageSize.width;
+      cy1 = y.clamp(0.0, 1.0) * imageSize.height;
+    }
+    cx1 = (cx1 * scale) + dx;
+    cy1 = (cy1 * scale) + dy;
+    if (flipHorizontal) cx1 = viewSize.width - cx1;
+    if (flipVertical) cy1 = viewSize.height - cy1;
+    candidate1 = Offset(cx1, cy1);
+    cand1Dist = (candidate1 - boxCenter).distanceSquared;
+
+    // Candidate 2: if keypoints looked normalized, assume they were relative
+    // to the bounding box. Map that to image pixels, then to view space.
+    Offset? candidate2;
+    double cand2Dist = double.infinity;
+    if (x >= 0.0 && x <= 1.2 && y >= 0.0 && y <= 1.2) {
+      double bx = (detection.normalizedBox.left + x.clamp(0.0, 1.0) * detection.normalizedBox.width) * imageSize.width;
+      double by = (detection.normalizedBox.top + y.clamp(0.0, 1.0) * detection.normalizedBox.height) * imageSize.height;
+      bx = (bx * scale) + dx;
+      by = (by * scale) + dy;
+      if (flipHorizontal) bx = viewSize.width - bx;
+      if (flipVertical) by = viewSize.height - by;
+      candidate2 = Offset(bx, by);
+      cand2Dist = (candidate2 - boxCenter).distanceSquared;
     }
 
-    if (flipVertical) {
-      screenY = viewSize.height - screenY;
+    // Pick a candidate that lands inside the box; otherwise choose the closer one.
+    Offset chosen;
+    if (candidate1 != null && viewBox.contains(candidate1)) {
+      chosen = candidate1;
+    } else if (candidate2 != null && viewBox.contains(candidate2)) {
+      chosen = candidate2;
+    } else {
+      chosen = (cand2Dist < cand1Dist && candidate2 != null) ? candidate2 : candidate1!;
     }
 
     return _PosePoint(
-      imagePosition: Offset(screenX, screenY),
+      imagePosition: chosen,
       confidence: confidence,
+    );
+  }
+
+  // Resolve the source image size, preferring explicit imageSize and falling
+  // back to inferring from the absolute vs normalized bounding box.
+  Size? _resolveImageSize(YOLOResult detection) {
+    final img = detection.imageSize;
+    if (img != null && img.width > 0 && img.height > 0) {
+      return Size(img.width, img.height);
+    }
+
+    final bb = detection.boundingBox;
+    final nb = detection.normalizedBox;
+    if (bb.width > 0 && nb.width > 0 && bb.height > 0 && nb.height > 0) {
+      final w = bb.width / nb.width;
+      final h = bb.height / nb.height;
+      if (w.isFinite && h.isFinite && w > 0 && h > 0) {
+        return Size(w, h);
+      }
+    }
+    return null;
+  }
+
+  void _logDebugMapping({
+    required Size viewSize,
+    required Size imageSize,
+    required double scale,
+    required double dx,
+    required double dy,
+    required YOLOResult detection,
+    _PosePoint? nose,
+    _PosePoint? leftEye,
+    _PosePoint? rightEye,
+  }) {
+    final now = DateTime.now();
+    if (_lastLog != null &&
+        now.difference(_lastLog!).inMilliseconds < _logThrottleMs) {
+      return;
+    }
+    _lastLog = now;
+
+    final nb = detection.normalizedBox;
+    final bb = detection.boundingBox;
+
+    debugPrint(
+      [
+        'POSE MAP — view=${viewSize.width.toStringAsFixed(0)}x${viewSize.height.toStringAsFixed(0)}'
+            ' img=${imageSize.width.toStringAsFixed(0)}x${imageSize.height.toStringAsFixed(0)}'
+            ' scale=${scale.toStringAsFixed(3)} dx=${dx.toStringAsFixed(1)} dy=${dy.toStringAsFixed(1)}',
+        'nb=L${nb.left.toStringAsFixed(3)} T${nb.top.toStringAsFixed(3)} '
+            'R${nb.right.toStringAsFixed(3)} B${nb.bottom.toStringAsFixed(3)}',
+        'bb=L${bb.left.toStringAsFixed(1)} T${bb.top.toStringAsFixed(1)} '
+            'R${bb.right.toStringAsFixed(1)} B${bb.bottom.toStringAsFixed(1)}',
+        if (nose != null)
+          'nose=${nose.imagePosition.dx.toStringAsFixed(1)},${nose.imagePosition.dy.toStringAsFixed(1)} '
+              'conf=${nose.confidence.toStringAsFixed(2)}',
+        if (leftEye != null)
+          'lEye=${leftEye.imagePosition.dx.toStringAsFixed(1)},${leftEye.imagePosition.dy.toStringAsFixed(1)} '
+              'conf=${leftEye.confidence.toStringAsFixed(2)}',
+        if (rightEye != null)
+          'rEye=${rightEye.imagePosition.dx.toStringAsFixed(1)},${rightEye.imagePosition.dy.toStringAsFixed(1)} '
+              'conf=${rightEye.confidence.toStringAsFixed(2)}',
+        'flips: H=$flipHorizontal V=$flipVertical',
+      ].join(' | '),
     );
   }
 

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:test_mask_mesh_ultralitics/features/segmentation/widgets/pose_overlay.dart';
+import 'package:test_mask_mesh_ultralitics/features/segmentation/widgets/debug_mask_overlay.dart';
 import 'package:test_mask_mesh_ultralitics/features/segmentation/widgets/simple_pose_overlay.dart';
 import 'package:ultralytics_yolo/yolo_view.dart';
 
@@ -120,12 +121,28 @@ List<Widget> _buildOverlays(SegmentationController controller) {
       );
       break;
     case SegmentationOverlayMode.simplePose:
+      // Draw segmentation mask overlay behind simple pose debug overlay
+      // overlays.add(
+      //   Positioned.fill(
+      //     child: DebugMaskOverlay(
+      //       detections: controller.detections,
+      //       maskThreshold: controller.maskThreshold,
+      //       flipHorizontal: controller.flipMaskHorizontal,
+      //       flipVertical: controller.flipMaskVertical,
+      //       maskSourceIsUpsideDown: true,
+      //       // Keep the mask subtle so pose markers remain readable
+      //       color: const Color(0xFF00FFFF),
+      //       opacity: 0.25,
+      //     ),
+      //   ),
+      // );
       overlays.add(
         Positioned.fill(
           child: SimplePoseOverlay(
             poseDetections: controller.poseDetections,
             flipHorizontal: controller.flipMaskHorizontal,
-            flipVertical: controller.flipMaskVertical,
+            // Keep vertical orientation matching the preview; no vertical flip.
+            flipVertical: false,
           ),
         ),
       );

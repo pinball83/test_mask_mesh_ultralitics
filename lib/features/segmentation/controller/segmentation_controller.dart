@@ -47,9 +47,9 @@ class SegmentationController extends ChangeNotifier {
   Timer? _cameraRetryTimer;
 
   YOLOStreamingConfig get streamingConfig => YOLOStreamingConfig.custom(
-    includeDetections: false,
+    includeDetections: true,
     includeClassifications: false,
-    includeProcessingTimeMs: false,
+    includeProcessingTimeMs: true,
     includeFps: true,
     includeMasks: true,
     includePoses: true,
@@ -57,7 +57,6 @@ class SegmentationController extends ChangeNotifier {
     includeOriginalImage: false,
     maxFPS: 24,
     throttleInterval: null,
-    inferenceFrequency: null, // disable time-based multi-model frequency control
   );
 
   bool get isLoading => _isLoading;
@@ -342,21 +341,22 @@ class SegmentationController extends ChangeNotifier {
         }
         break;
       case SegmentationOverlayMode.simplePose:
+        // Run both segmentation and pose so we can draw masks under
+        // the simple pose debug overlay.
+        models = [
+          YOLOModelSpec(
+            modelPath: segPath,
+            type: ModelLoader.modelNameSegmentation,
+            task: YOLOTask.segment,
+          ),
+        ];
         if (posePath != null) {
           models = [
+            ...models,
             YOLOModelSpec(
               modelPath: posePath,
               type: ModelLoader.modelNamePose,
               task: YOLOTask.pose,
-            ),
-          ];
-        } else {
-          // Fallback if pose model missing (shouldn't happen if init succeeds)
-          models = [
-            YOLOModelSpec(
-              modelPath: segPath,
-              type: ModelLoader.modelNameSegmentation,
-              task: YOLOTask.segment,
             ),
           ];
         }
