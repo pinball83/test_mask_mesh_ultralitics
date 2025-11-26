@@ -2,7 +2,12 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:ffmpeg_kit_min_gpl/ffmpeg_kit.dart';
+import 'package:ffmpeg_kit_min_gpl/return_code.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:video_player/video_player.dart';
 import 'package:ultralytics_yolo/ultralytics_yolo.dart';
 import 'package:ultralytics_yolo/models/yolo_result.dart';
 import '../services/frame_processing_service.dart';
@@ -14,11 +19,15 @@ class OptimizedVideoSegmentationController extends ChangeNotifier {
   bool _isPlaying = false;
   int _currentFrameIndex = 0;
   Timer? _playbackTimer;
+  VideoPlayerController? _videoController;
+  bool _videoInitialized = false;
 
   // Frame data
   List<Uint8List> _frameBytes = [];
   List<String> _framePaths = [];
-  Duration _frameDuration = Duration(milliseconds: 33); // ~30 FPS
+  Duration _frameDuration = Duration(
+    milliseconds: 33,
+  ); // ~30 FPS (adjusted on init)
 
   // Processing results with buffering
   final Map<int, ProcessedFrame> _processedFrames = {};
@@ -34,8 +43,8 @@ class OptimizedVideoSegmentationController extends ChangeNotifier {
   StreamSubscription<PoseResult>? _poseSubscription;
 
   // Performance optimization
-  static const int maxBufferedFrames = 10;
-  static const int processingAheadFrames = 3;
+  static const int maxBufferedFrames = 6;
+  static const int processingAheadFrames = 1;
 
   // Getters
   bool get isPlaying => _isPlaying;
@@ -44,12 +53,78 @@ class OptimizedVideoSegmentationController extends ChangeNotifier {
   List<YOLOResult> get currentPoseDetections => _currentPoseDetections;
   Duration get frameDuration => _frameDuration;
   FpsCounter get fpsCounter => _processingService.fpsCounter;
+  VideoPlayerController? get videoController => _videoController;
+  bool get isVideoInitialized => _videoInitialized;
 
   Future<void> initialize(List<String> framePaths) async {
     _framePaths = framePaths;
     await _loadFrames();
     await _processingService.initialize();
     _setupStreamListeners();
+  }
+
+  Future<List<String>> _extractFramesIfNeeded({
+    required File videoFile,
+    required int targetFps,
+  }) async {
+    final tempDir = await getTemporaryDirectory();
+    final framesDir = Directory('${tempDir.path}/frames');
+    if (!await framesDir.exists()) {
+      await framesDir.create();
+    }
+
+    final existingFiles = await framesDir.list().toList();
+    final hasFrames = existingFiles.whereType<File>().any(
+      (f) => f.path.endsWith('.jpg'),
+    );
+
+    if (!hasFrames) {
+      // Extract at target fps; scale down for performance (Android smaller)
+      final scaledWidth = Platform.isIOS ? 480 : 256;
+      final command =
+          '-i ${videoFile.path} -vf "fps=$targetFps,scale=$scaledWidth:-1" ${framesDir.path}/frame_%04d.jpg';
+      final session = await FFmpegKit.execute(command);
+      final returnCode = await session.getReturnCode();
+      if (!ReturnCode.isSuccess(returnCode)) {
+        throw Exception('Failed to extract frames');
+      }
+    }
+
+    final files = await framesDir.list().toList();
+    final paths =
+        files
+            .whereType<File>()
+            .map((f) => f.path)
+            .where((p) => p.endsWith('.jpg'))
+            .toList()
+          ..sort();
+    return paths;
+  }
+
+  Future<void> initializeFromFile(
+    File videoFile, {
+    required int targetFps,
+  }) async {
+    // 0) Validate the video file exists
+    if (!await videoFile.exists()) {
+      throw Exception('Video file not found: ${videoFile.path}');
+    }
+
+    // 1) Extract frames and initialize processing
+    final paths = await _extractFramesIfNeeded(
+      videoFile: videoFile,
+      targetFps: targetFps,
+    );
+    await initialize(paths);
+
+    // 2) Initialize video player
+    _videoController = VideoPlayerController.file(videoFile);
+    await _videoController!.initialize();
+    await _videoController!.setLooping(true);
+    // Align frame duration to requested fps
+    _frameDuration = Duration(milliseconds: (1000 / targetFps).round());
+    _videoInitialized = true;
+    notifyListeners();
   }
 
   Future<void> _loadFrames() async {
@@ -71,11 +146,25 @@ class OptimizedVideoSegmentationController extends ChangeNotifier {
       result,
     ) {
       _segmentationResults[result.frameIndex] = result;
+      if (result.frameIndex == _currentFrameIndex) {
+        final newDetections = result.detections;
+        if (!listEquals(newDetections, _currentDetections)) {
+          _currentDetections = newDetections;
+          notifyListeners();
+        }
+      }
       _tryCombineResults(result.frameIndex);
     });
 
     _poseSubscription = _processingService.poseStream.listen((result) {
       _poseResults[result.frameIndex] = result;
+      if (result.frameIndex == _currentFrameIndex) {
+        final newPose = result.detections;
+        if (!listEquals(newPose, _currentPoseDetections)) {
+          _currentPoseDetections = newPose;
+          notifyListeners();
+        }
+      }
       _tryCombineResults(result.frameIndex);
     });
   }
@@ -123,9 +212,12 @@ class OptimizedVideoSegmentationController extends ChangeNotifier {
 
     _isPlaying = true;
     _playbackTimer = Timer.periodic(_frameDuration, _onPlaybackTick);
+    unawaited(_videoController?.play());
 
     // Pre-process a few frames ahead
     _schedulePreprocessing();
+    // Process current frame immediately for fast first paint
+    _processCurrentFrame();
   }
 
   void _onPlaybackTick(Timer timer) {
@@ -165,10 +257,21 @@ class OptimizedVideoSegmentationController extends ChangeNotifier {
     }
   }
 
+  void _processCurrentFrame() {
+    if (_frameBytes.isEmpty || _currentFrameIndex >= _frameBytes.length) return;
+    final frameData = FrameData(
+      bytes: _frameBytes[_currentFrameIndex],
+      index: _currentFrameIndex,
+      timestamp: DateTime.now(),
+    );
+    _processingService.processFrame(frameData);
+  }
+
   void pausePlayback() {
     _isPlaying = false;
     _playbackTimer?.cancel();
     _playbackTimer = null;
+    unawaited(_videoController?.pause());
   }
 
   void seekToFrame(int frameIndex) {
@@ -202,6 +305,7 @@ class OptimizedVideoSegmentationController extends ChangeNotifier {
     _segmentationSubscription?.cancel();
     _poseSubscription?.cancel();
     _processingService.dispose();
+    unawaited(_videoController?.dispose());
     super.dispose();
   }
 }

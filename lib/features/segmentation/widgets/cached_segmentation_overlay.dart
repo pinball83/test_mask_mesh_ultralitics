@@ -12,6 +12,8 @@ class CachedSegmentationOverlay extends StatefulWidget {
     required this.flipVertical,
     this.backgroundAsset = 'assets/images/bg_image.jpg',
     this.maskSmoothing = 0.0,
+    this.backgroundOpacity = 1.0,
+    this.maskSourceIsUpsideDown = false,
   });
 
   final List<YOLOResult> detections;
@@ -20,22 +22,25 @@ class CachedSegmentationOverlay extends StatefulWidget {
   final bool flipVertical;
   final String? backgroundAsset;
   final double maskSmoothing;
+  final double backgroundOpacity; // 0..1
+  final bool maskSourceIsUpsideDown;
 
   @override
-  State<CachedSegmentationOverlay> createState() => _CachedSegmentationOverlayState();
+  State<CachedSegmentationOverlay> createState() =>
+      _CachedSegmentationOverlayState();
 }
 
 class _CachedSegmentationOverlayState extends State<CachedSegmentationOverlay> {
   ui.Image? _backgroundImage;
   ImageStream? _imageStream;
   ImageStreamListener? _imageStreamListener;
-  
+
   // Caching for performance
   final Map<String, ui.Picture> _pictureCache = {};
   final Map<String, ui.Image> _maskCache = {};
   String? _lastCacheKey;
   ui.Picture? _cachedPicture;
-  
+
   static const double _targetBackgroundWidth = 720.0;
 
   @override
@@ -47,8 +52,19 @@ class _CachedSegmentationOverlayState extends State<CachedSegmentationOverlay> {
   @override
   void didUpdateWidget(covariant CachedSegmentationOverlay oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.backgroundAsset != oldWidget.backgroundAsset) {
+    final bgChanged = widget.backgroundAsset != oldWidget.backgroundAsset;
+    if (bgChanged) {
       _resolveBackgroundImage();
+    }
+    final flagsChanged =
+        widget.flipHorizontal != oldWidget.flipHorizontal ||
+        widget.flipVertical != oldWidget.flipVertical ||
+        widget.maskSmoothing != oldWidget.maskSmoothing ||
+        widget.backgroundOpacity != oldWidget.backgroundOpacity ||
+        widget.maskSourceIsUpsideDown != oldWidget.maskSourceIsUpsideDown;
+    if (bgChanged || flagsChanged) {
+      _clearCache();
+      setState(() {});
     }
   }
 
@@ -108,7 +124,7 @@ class _CachedSegmentationOverlayState extends State<CachedSegmentationOverlay> {
 
   String _generateCacheKey() {
     final detectionsHash = widget.detections.map((d) => d.hashCode).join(',');
-    return '${widget.maskThreshold}_${widget.flipHorizontal}_${widget.flipVertical}_${widget.maskSmoothing}_$detectionsHash';
+    return '${widget.maskThreshold}_${widget.flipHorizontal}_${widget.flipVertical}_${widget.maskSmoothing}_${widget.backgroundOpacity.toStringAsFixed(2)}_${widget.maskSourceIsUpsideDown}_$detectionsHash';
   }
 
   void _clearCache() {
@@ -153,6 +169,8 @@ class _CachedSegmentationMaskPainter extends CustomPainter {
     required this.flipVertical,
     this.backgroundImage,
     this.maskSmoothing = 0.8,
+    this.backgroundOpacity = 1.0,
+    this.maskSourceIsUpsideDown = false,
     required this.cacheKey,
     required this.pictureCache,
     required this.maskCache,
@@ -164,6 +182,8 @@ class _CachedSegmentationMaskPainter extends CustomPainter {
   final bool flipVertical;
   final ui.Image? backgroundImage;
   final double maskSmoothing;
+  final double backgroundOpacity;
+  final bool maskSourceIsUpsideDown;
   final String cacheKey;
   final Map<String, ui.Picture> pictureCache;
   final Map<String, ui.Image> maskCache;
@@ -175,8 +195,9 @@ class _CachedSegmentationMaskPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    final layerBounds = Offset.zero & size;
     canvas.save();
-    canvas.clipRect(Offset.zero & size);
+    canvas.clipRect(layerBounds);
 
     final geometry = DetectionViewGeometry.fromDetections(detections, size);
     if (geometry == null) {
@@ -195,18 +216,26 @@ class _CachedSegmentationMaskPainter extends CustomPainter {
     // Create new picture and cache it
     final recorder = ui.PictureRecorder();
     final pictureCanvas = Canvas(recorder);
-    
+
+    // Use a layer so dstOut properly cuts transparency in the result
+    // final layerBounds = Offset.zero & size;
+    pictureCanvas.saveLayer(layerBounds, Paint());
     _paintSegmentation(pictureCanvas, size, geometry);
-    
+    pictureCanvas.restore();
+
     final picture = recorder.endRecording();
     pictureCache[cacheKey] = picture;
-    
+
     // Draw the new picture
     canvas.drawPicture(picture);
     canvas.restore();
   }
 
-  void _paintSegmentation(Canvas canvas, Size size, DetectionViewGeometry geometry) {
+  void _paintSegmentation(
+    Canvas canvas,
+    Size size,
+    DetectionViewGeometry geometry,
+  ) {
     final sourceWidth = geometry.sourceWidth;
     final sourceHeight = geometry.sourceHeight;
     final scale = geometry.scale;
@@ -217,7 +246,6 @@ class _CachedSegmentationMaskPainter extends CustomPainter {
 
     const maskSourceIsMirrored = false;
     final effectiveFlipH = maskSourceIsMirrored ? false : flipHorizontal;
-    const maskSourceIsUpsideDown = true;
     final effectiveFlipV = maskSourceIsUpsideDown ^ flipVertical;
 
     // Draw background
@@ -227,9 +255,17 @@ class _CachedSegmentationMaskPainter extends CustomPainter {
         rect: Offset.zero & size,
         image: backgroundImage!,
         fit: BoxFit.cover,
+        colorFilter: ColorFilter.mode(
+          Colors.white.withOpacity(backgroundOpacity.clamp(0.0, 1.0)),
+          BlendMode.modulate,
+        ),
       );
     } else {
-      canvas.drawRect(Offset.zero & size, _backgroundPaint);
+      final paint = Paint()
+        ..color = _backgroundPaint.color.withOpacity(
+          backgroundOpacity.clamp(0.0, 1.0),
+        );
+      canvas.drawRect(Offset.zero & size, paint);
     }
 
     // Prepare mask painting
@@ -240,7 +276,7 @@ class _CachedSegmentationMaskPainter extends CustomPainter {
 
     // Batch mask drawing for better performance
     final maskPaths = <Path>[];
-    
+
     for (final detection in detections) {
       final mask = detection.mask;
       final bounds = detection.boundingBox;
@@ -298,7 +334,7 @@ class _CachedSegmentationMaskPainter extends CustomPainter {
         flipH: effectiveFlipH,
         flipV: effectiveFlipV,
       );
-      
+
       if (maskPath != null) {
         maskPaths.add(maskPath);
       }

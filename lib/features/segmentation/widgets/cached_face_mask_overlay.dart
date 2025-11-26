@@ -10,12 +10,18 @@ class CachedFaceMaskOverlay extends StatefulWidget {
     required this.maskAsset,
     required this.flipHorizontal,
     required this.flipVertical,
+    this.opacity = 0.7,
+    this.poseSourceIsUpsideDown = true,
+    this.maskRotationOffset = 0.0,
   });
 
   final List<YOLOResult> poseDetections;
   final String? maskAsset;
   final bool flipHorizontal;
   final bool flipVertical;
+  final double opacity; // 0..1
+  final bool poseSourceIsUpsideDown;
+  final double maskRotationOffset; // radians
 
   @override
   State<CachedFaceMaskOverlay> createState() => _CachedFaceMaskOverlayState();
@@ -40,8 +46,19 @@ class _CachedFaceMaskOverlayState extends State<CachedFaceMaskOverlay> {
   @override
   void didUpdateWidget(covariant CachedFaceMaskOverlay oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.maskAsset != oldWidget.maskAsset) {
+    final maskChanged = widget.maskAsset != oldWidget.maskAsset;
+    final flagsChanged =
+        widget.flipHorizontal != oldWidget.flipHorizontal ||
+        widget.flipVertical != oldWidget.flipVertical ||
+        widget.opacity != oldWidget.opacity ||
+        widget.poseSourceIsUpsideDown != oldWidget.poseSourceIsUpsideDown ||
+        widget.maskRotationOffset != oldWidget.maskRotationOffset;
+    if (maskChanged) {
       _resolveMaskImage();
+    }
+    if (maskChanged || flagsChanged) {
+      // Invalidate cached drawings to apply new transforms/opacity
+      _clearCache();
     }
   }
 
@@ -98,14 +115,30 @@ class _CachedFaceMaskOverlayState extends State<CachedFaceMaskOverlay> {
     final nosePos = '${keypoints[0].x.toStringAsFixed(2)}_${keypoints[0].y.toStringAsFixed(2)}';
     final leftEyePos = '${keypoints[1].x.toStringAsFixed(2)}_${keypoints[1].y.toStringAsFixed(2)}';
     final rightEyePos = '${keypoints[2].x.toStringAsFixed(2)}_${keypoints[2].y.toStringAsFixed(2)}';
-    
-    return '${widget.maskAsset}_${widget.flipHorizontal}_${widget.flipVertical}_${nosePos}_${leftEyePos}_${rightEyePos}';
+    final params = [
+      widget.maskAsset,
+      widget.flipHorizontal,
+      widget.flipVertical,
+      widget.opacity.toStringAsFixed(2),
+      widget.poseSourceIsUpsideDown,
+      widget.maskRotationOffset.toStringAsFixed(3),
+      nosePos,
+      leftEyePos,
+      rightEyePos,
+    ];
+    return params.join('_');
   }
 
   @override
   Widget build(BuildContext context) {
-    if (widget.poseDetections.isEmpty || _maskImage == null) {
+    if (_maskImage == null) {
       return const SizedBox.shrink();
+    }
+
+    // Compute and remember last non-empty cache key so we can draw fallback
+    final key = _generateCacheKey();
+    if (key.isNotEmpty) {
+      _lastCacheKey = key;
     }
 
     return IgnorePointer(
@@ -115,7 +148,10 @@ class _CachedFaceMaskOverlayState extends State<CachedFaceMaskOverlay> {
           maskImage: _maskImage!,
           flipHorizontal: widget.flipHorizontal,
           flipVertical: widget.flipVertical,
-          cacheKey: _generateCacheKey(),
+          opacity: widget.opacity.clamp(0.0, 1.0),
+          poseSourceIsUpsideDown: widget.poseSourceIsUpsideDown,
+          maskRotationOffset: widget.maskRotationOffset,
+          cacheKey: _lastCacheKey ?? key,
           pictureCache: _pictureCache,
         ),
       ),
@@ -129,6 +165,9 @@ class _CachedFaceMaskPainter extends CustomPainter {
     required this.maskImage,
     required this.flipHorizontal,
     required this.flipVertical,
+    required this.opacity,
+    required this.poseSourceIsUpsideDown,
+    required this.maskRotationOffset,
     required this.cacheKey,
     required this.pictureCache,
   });
@@ -137,19 +176,23 @@ class _CachedFaceMaskPainter extends CustomPainter {
   final ui.Image maskImage;
   final bool flipHorizontal;
   final bool flipVertical;
+  final double opacity;
+  final bool poseSourceIsUpsideDown;
+  final double maskRotationOffset;
   final String cacheKey;
   final Map<String, ui.Picture> pictureCache;
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (poseDetections.isEmpty || cacheKey.isEmpty) {
-      return;
-    }
-
-    // Check cache first
-    if (pictureCache.containsKey(cacheKey)) {
+    // If we have a cached picture for the computed/last key, draw it first
+    if (cacheKey.isNotEmpty && pictureCache.containsKey(cacheKey)) {
       final cachedPicture = pictureCache[cacheKey]!;
       canvas.drawPicture(cachedPicture);
+      return; // Draw cached and exit for speed
+    }
+
+    if (poseDetections.isEmpty) {
+      // No detections and no cache to reuse
       return;
     }
 
@@ -174,8 +217,7 @@ class _CachedFaceMaskPainter extends CustomPainter {
   }
 
   void _paintMask(Canvas canvas, Size size) {
-    const poseSourceIsUpsideDown = true;
-    const poseSourceIsMirrored = false;
+    final poseSourceIsMirrored = false;
     final effectiveFlipH = poseSourceIsMirrored
         ? !flipHorizontal
         : flipHorizontal;
@@ -218,7 +260,6 @@ class _CachedFaceMaskPainter extends CustomPainter {
       pow(rightEye.dx - leftEye.dx, 2) + pow(rightEye.dy - leftEye.dy, 2),
     );
     final angle = atan2(rightEye.dy - leftEye.dy, rightEye.dx - leftEye.dx);
-    const maskRotationOffset = pi;
     final appliedAngle = angle + maskRotationOffset;
 
     final scale = eyeDist * 4.5;
@@ -241,12 +282,16 @@ class _CachedFaceMaskPainter extends CustomPainter {
     canvas.scale(scaleFactor);
 
     // Draw mask with optimized quality
+    final paint = Paint()
+      ..filterQuality = FilterQuality.low
+      ..isAntiAlias = true
+      ..blendMode = BlendMode.modulate
+      ..color = Color.fromRGBO(255, 255, 255, opacity);
+
     canvas.drawImage(
       maskImage,
       Offset(-maskW / 2, -maskH / 2),
-      Paint()
-        ..filterQuality = FilterQuality.medium
-        ..isAntiAlias = true,
+      paint,
     );
 
     canvas.restore();
@@ -312,6 +357,8 @@ class _CachedFaceMaskPainter extends CustomPainter {
         oldDelegate.maskImage != maskImage ||
         oldDelegate.flipHorizontal != flipHorizontal ||
         oldDelegate.flipVertical != flipVertical ||
+        oldDelegate.opacity != opacity ||
+        oldDelegate.poseSourceIsUpsideDown != poseSourceIsUpsideDown ||
         oldDelegate.cacheKey != cacheKey;
   }
 }

@@ -1,10 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
-import 'package:ffmpeg_kit_min_gpl/ffmpeg_kit.dart';
-import 'package:ffmpeg_kit_min_gpl/return_code.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
 import '../controller/optimized_video_segmentation_controller.dart';
@@ -22,17 +19,14 @@ class OptimizedVideoSegmentationScreen extends StatefulWidget {
 class _OptimizedVideoSegmentationScreenState
     extends State<OptimizedVideoSegmentationScreen> {
   late OptimizedVideoSegmentationController _controller;
-  VideoPlayerController? _videoController;
 
   // UI State
   bool _isLoading = true;
   String? _errorMessage;
   String _statusMessage = '';
-  bool _isProcessing = false;
   Timer? _fpsUpdateTimer;
   double _currentFps = 0.0;
   final int _targetFps = 30;
-  late List<String> _framePaths;
 
   @override
   void initState() {
@@ -76,15 +70,9 @@ class _OptimizedVideoSegmentationScreenState
 
       final tempDir = await getTemporaryDirectory();
       final videoFile = File('${tempDir.path}/sample_video.mp4');
-      // Load video frames (replace with your actual video loading logic)
-      final framePaths = await _loadVideoFrames(tempDir, videoFile);
-
-      await _controller.initialize(framePaths);
-
-      _videoController = VideoPlayerController.file(videoFile);
-      await _videoController!.initialize();
-      await _videoController!.setLooping(false);
-      await _videoController!.play();
+      // Prepare video and frames in controller, then start playback (video + processing)
+      await _controller.initializeFromFile(videoFile, targetFps: _targetFps);
+      _controller.startPlayback();
 
       setState(() {
         _isLoading = false;
@@ -97,60 +85,7 @@ class _OptimizedVideoSegmentationScreenState
     }
   }
 
-  Future<List<String>> _loadVideoFrames(
-    Directory tempDir,
-    File videoFile,
-  ) async {
-    // Check if asset exists, if not use a placeholder or error
-    // try {
-    //   // final byteData = await rootBundle.load('assets/videos/sample_video.mp4');
-    //   // await videoFile.writeAsBytes(byteData.buffer.asUint8List());
-    // } catch (e) {
-    //   setState(() {
-    //     _isProcessing = false;
-    //     _statusMessage =
-    //         'Video asset not found. Please add assets/videos/sample_video.mp4';
-    //   });
-    //   return [];
-    // }
-    final framesDir = Directory('${tempDir.path}/frames');
-    if (!await framesDir.exists()) {
-      await framesDir.create();
-    }
-
-    final existingFiles = await framesDir.list().toList();
-    final hasFrames = existingFiles
-        .where((f) => f.path.endsWith('.jpg'))
-        .isNotEmpty;
-
-    if (!hasFrames) {
-      setState(() => _statusMessage = 'Extracting frames...');
-      // Extract at 30fps, scale to 640 width (maintain aspect ratio) for performance
-      final scaledWidth = Platform.isIOS ? 640 : 360;
-      final command =
-          '-i ${videoFile.path} -vf "fps=$_targetFps,scale=$scaledWidth:-1" ${framesDir.path}/frame_%04d.jpg';
-      final session = await FFmpegKit.execute(command);
-      final returnCode = await session.getReturnCode();
-
-      if (!ReturnCode.isSuccess(returnCode)) {
-        setState(() {
-          _isProcessing = false;
-          _statusMessage = 'Failed to extract frames';
-        });
-        return [];
-      }
-    }
-
-    final files = await framesDir.list().toList();
-    _framePaths =
-        files
-            .whereType<File>()
-            .map((f) => f.path)
-            .where((p) => p.endsWith('.jpg'))
-            .toList()
-          ..sort();
-    return _framePaths;
-  }
+  // Frame extraction moved into controller
 
   @override
   Widget build(BuildContext context) {
@@ -211,6 +146,8 @@ class _OptimizedVideoSegmentationScreenState
                   flipVertical: false,
                   backgroundAsset: 'assets/images/bg_image.jpg',
                   maskSmoothing: 1.0,
+                  backgroundOpacity: 0.85,
+                  maskSourceIsUpsideDown: false,
                 );
               },
             ),
@@ -226,6 +163,9 @@ class _OptimizedVideoSegmentationScreenState
                   maskAsset: 'assets/masks/m_cat.png',
                   flipHorizontal: false,
                   flipVertical: false,
+                  opacity: 0.7,
+                  poseSourceIsUpsideDown: true,
+                  maskRotationOffset: 3.141592653589793,
                 );
               },
             ),
@@ -240,14 +180,15 @@ class _OptimizedVideoSegmentationScreenState
   }
 
   Widget _buildVideoPlayer() {
-    if (_videoController == null || !_videoController!.value.isInitialized) {
+    final vc = _controller.videoController;
+    if (vc == null || !vc.value.isInitialized) {
       return const Center(child: CircularProgressIndicator());
     }
 
     return Center(
       child: AspectRatio(
-        aspectRatio: _videoController!.value.aspectRatio,
-        child: VideoPlayer(_videoController!),
+        aspectRatio: vc.value.aspectRatio,
+        child: VideoPlayer(vc),
       ),
     );
   }
