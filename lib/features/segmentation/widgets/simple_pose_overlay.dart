@@ -508,10 +508,7 @@ class _SimplePosePainter extends CustomPainter {
       return;
     }
 
-    final center = Offset(
-      nose.imagePosition.dx,
-      (leftEye.imagePosition.dy + rightEye.imagePosition.dy) / 2,
-    );
+    final center = nose.imagePosition;
 
     final eyeDistance =
         (leftEye.imagePosition - rightEye.imagePosition).distance;
